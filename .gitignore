@@ -1,0 +1,13 @@
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# media — ไฟล์วีดีโอไม่เข้า git
+media/
+
+# env / os
+.env
+.DS_Store
