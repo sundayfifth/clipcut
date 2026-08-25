@@ -20,7 +20,9 @@
 - OpenCV — อ่าน/วิเคราะห์เฟรม
 - yt-dlp — โหลดคลิปจาก YouTube
 
-**ยังไม่ตัดสินใจ** (อย่าเพิ่งติดตั้งจนกว่าจะสรุป): model ตรวจจับตัวคน (MediaPipe vs YOLO) และ OCR ภาษาไทย (PaddleOCR vs EasyOCR vs Gemini vision)
+**ห้ามใช้ `ultralytics` (YOLO)** — เป็น AGPL-3.0 และ Ultralytics ระบุเองว่า internal business tool แบบ clipcut ต้องซื้อ Enterprise License รวมถึงห้าม depend repo ที่ depend มันด้วย ใช้ MediaPipe (Apache 2.0) เป็นหลัก + RF-DETR รุ่น Nano/Small/Medium/Large (Apache 2.0) เมื่อต้องการ multi-person — เลี่ยงรุ่น XL/2XL ที่เป็น PML 1.0
+
+**ยังไม่ตัดสินใจ** (อย่าเพิ่งติดตั้งจนกว่าจะสรุป): OCR ภาษาไทยสำหรับ burned-in text และวิธี export ไป CapCut/Hyperframe — ดู `docs/2026-08-25-research-auto-reframe.md` หัวข้อ "ยังไม่ได้คำตอบ"
 
 ## Running it
 
@@ -36,6 +38,8 @@ test: `pytest`
 ## Docs
 
 Project docs — specs, PRDs, research notes, ADRs — live under `docs/`.
+
+อ่านก่อนเริ่มเขียน pipeline: [`docs/2026-08-25-research-auto-reframe.md`](docs/2026-08-25-research-auto-reframe.md) — กติกา crop-vs-pad, camera path smoothing, และข้อจำกัด license ที่ verify มาแล้ว
 
 ## Development rules
 
