@@ -14,6 +14,7 @@
 ## Stack
 
 - Python 3.12 + FastAPI (backend) — `app/main.py`
+- MediaPipe ObjectDetector ตรวจจับคน (**pin < 1.0** — 1.0.x crash บน macOS) โมเดลโหลดด้วย `./download-models.sh`
 - Vanilla HTML/CSS/JS (frontend) — `app/static/`
 - ffmpeg เป็น render engine (มีในเครื่องที่ `/opt/homebrew/bin/ffmpeg`)
 - PySceneDetect — หา shot boundary
@@ -37,8 +38,11 @@ uvicorn app.main:app --reload
 
 test: `pytest` (ต้องมี ffmpeg — test สร้างคลิปทดสอบเอง)
 
-**สถานะตอนนี้**: ทำได้ถึงขั้นเลือกไฟล์ → หา shot (ปรับความละเอียดได้ 4 ระดับ) → โชว์ภาพตัวอย่างต่อ shot
-ยังไม่ทำ: ตรวจจับตัวคน, ตัดสิน crop-vs-pad, render, checklist กราฟฟิก
+**สถานะตอนนี้**: pipeline เดินครบเส้นแล้ว — เลือกคลิป → แบ่งซีน (ปรับความละเอียดได้ 4 ระดับ) → ตรวจจับตัวคน → ตัดสิน crop/pad ต่อซีน (คนพลิกเองได้) → render mp4 9:16 พร้อมเสียง
+ยังไม่ทำ: checklist กราฟฟิก, ตัดสั้นเฉพาะช่วงน่าสนใจ, รับ URL YouTube
+
+**บทเรียนที่ต้องจำ**: อย่าบังคับให้ตัวคน*ทั้งตัว*อยู่ในกรอบ 9:16 — เคยเขียนแบบนั้นแล้ว 23 จาก 25 ซีนกลายเป็น pad หมด สิ่งที่ต้องอยู่ในกรอบคือ*ตำแหน่ง*ของ subject
+**ข้อจำกัดที่รู้แล้ว**: สกรีนช็อตที่มีรูปคนอยู่ข้างใน detector จะเห็นเป็นคนจริงแล้ว crop จนข้อความหาย — จึงต้องมีปุ่มให้คนพลิก
 
 ## Docs
 

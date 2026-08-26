@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.analyze import DEFAULT_SENSITIVITY, SENSITIVITY
+from app.analyze import AnalyzeError
 from app.jobs import JobStore
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -18,6 +19,7 @@ STATIC_DIR = BASE_DIR / "static"
 MEDIA_DIR = BASE_DIR.parent / "media"
 INPUT_DIR = MEDIA_DIR / "input"
 WORK_DIR = MEDIA_DIR / "work"
+OUTPUT_DIR = MEDIA_DIR / "output"
 
 # media/ ถูก gitignore ไว้ทั้งก้อน — สร้างให้เองตอน start จะได้ clone มาแล้วรันได้เลย
 for _sub in ("input", "work", "output"):
@@ -25,8 +27,8 @@ for _sub in ("input", "work", "output"):
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
-app = FastAPI(title="clipcut", version="0.2.0")
-jobs = JobStore(WORK_DIR)
+app = FastAPI(title="clipcut", version="0.3.0")
+jobs = JobStore(WORK_DIR, OUTPUT_DIR)
 
 
 @app.get("/health")
@@ -116,10 +118,43 @@ def list_jobs() -> dict:
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
+    return _require_job(job_id).as_dict()
+
+
+def _require_job(job_id: str):
     job = jobs.get(job_id)
     if job is None:
         raise HTTPException(404, "ไม่พบงานนี้")
+    return job
+
+
+@app.post("/api/jobs/{job_id}/shots/{shot_index}/mode")
+def set_shot_mode(job_id: str, shot_index: int, mode: str) -> dict:
+    """ให้คนพลิกการตัดสินของเครื่อง — เช่นสกรีนช็อตที่ detector เห็นรูปคนแล้ว crop ผิด"""
+    job = _require_job(job_id)
+    try:
+        jobs.set_mode(job, shot_index, mode)
+    except AnalyzeError as err:
+        raise HTTPException(400, str(err)) from err
     return job.as_dict()
+
+
+@app.post("/api/jobs/{job_id}/render")
+def start_render(job_id: str) -> dict:
+    job = _require_job(job_id)
+    try:
+        jobs.start_render(job)
+    except AnalyzeError as err:
+        raise HTTPException(400, str(err)) from err
+    return job.as_dict()
+
+
+@app.get("/api/jobs/{job_id}/output")
+def download_output(job_id: str) -> FileResponse:
+    job = _require_job(job_id)
+    if not job.output or not Path(job.output).is_file():
+        raise HTTPException(404, "ยังไม่มีไฟล์ผลลัพธ์")
+    return FileResponse(job.output, filename=Path(job.output).name)
 
 
 @app.get("/api/jobs/{job_id}/thumbs/{filename}")

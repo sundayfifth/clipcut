@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 import time
 
 import pytest
@@ -66,24 +67,64 @@ def test_path_traversal_is_rejected():
     assert client.post("/api/jobs", params={"name": "../../etc/passwd"}).status_code == 404
 
 
-def test_job_runs_end_to_end_and_produces_thumbnails(sample):
-    """ทดสอบทั้งเส้น: submit -> วิเคราะห์ -> ได้ภาพตัวอย่างที่โหลดได้จริง"""
+def _wait(job_id, want, timeout=300):
+    deadline = time.monotonic() + timeout
+    job = client.get(f"/api/jobs/{job_id}").json()
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] in (want, "error"):
+            return job
+        time.sleep(0.2)
+    return job
+
+
+def test_pipeline_runs_from_analyse_to_rendered_file(sample):
+    """ทดสอบทั้งเส้น: วิเคราะห์ -> พลิกการตัดสิน -> render -> ได้ไฟล์ 9:16 จริง"""
     dest = INPUT_DIR / "pytest-sample.mp4"
     shutil.copy(sample, dest)
     try:
         job = client.post("/api/jobs", params={"name": dest.name}).json()
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            job = client.get(f"/api/jobs/{job['id']}").json()
-            if job["status"] in ("done", "error"):
-                break
-            time.sleep(0.1)
-        assert job["status"] == "done", job.get("error")
+        job = _wait(job["id"], "ready")
+        assert job["status"] == "ready", job.get("error")
+
         assert len(job["shots"]) == 3
         assert all(s["thumbnail"] for s in job["shots"])
         assert client.get(job["shots"][0]["thumbnail"]).status_code == 200
+
+        # ทุกซีนต้องมีการตัดสินพร้อมเหตุผล
+        for shot in job["shots"]:
+            assert shot["plan"]["mode"] in ("crop", "pad")
+            assert shot["plan"]["reason"]
+        assert job["summary"]["crop"] + job["summary"]["pad"] == 3
+
+        # คนพลิกการตัดสินได้ และต้องได้กรอบ crop มาด้วยแม้เครื่องไม่ได้คำนวณไว้
+        flipped = client.post(
+            f"/api/jobs/{job['id']}/shots/0/mode", params={"mode": "crop"}
+        ).json()
+        first = flipped["shots"][0]["plan"]
+        assert first["mode"] == "crop"
+        assert first["crop"]["w"] > 0
+
+        assert client.post(
+            f"/api/jobs/{job['id']}/shots/0/mode", params={"mode": "หมุน"}
+        ).status_code == 400
+
+        # render ออกมาเป็นไฟล์ 9:16 จริง
+        client.post(f"/api/jobs/{job['id']}/render")
+        job = _wait(job["id"], "done")
+        assert job["status"] == "done", job.get("error")
+
+        out = Path(job["output"])
+        assert out.is_file()
+        info = probe(out)
+        assert (info.width, info.height) == (1080, 1920)
+        assert client.get(f"/api/jobs/{job['id']}/output").status_code == 200
     finally:
         dest.unlink(missing_ok=True)
+
+
+def test_render_before_analysis_is_rejected():
+    assert client.post("/api/jobs/ไม่มีงานนี้/render").status_code == 404
 
 
 @pytest.fixture

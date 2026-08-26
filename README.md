@@ -10,6 +10,7 @@
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+./download-models.sh
 ```
 
 ## ใช้งาน
@@ -23,4 +24,6 @@ uvicorn app.main:app --reload
 
 ## สถานะ
 
-ยังเป็นโครงเปล่า — pipeline (ingest / analyze / plan / render / report) ยังไม่ได้เขียน
+ทำได้แล้ว: เลือกคลิป → แบ่งซีน → ตรวจจับตัวคน → ตัดสิน crop/ย่อ+เติมพื้นหลังต่อซีน (พลิกเองได้) → render เป็น mp4 9:16
+
+ยังไม่ได้ทำ: checklist กราฟฟิกที่ต้องเติม, ซับไตเติล (ใช้ skill `subtitle-align` แยก), ตัดสั้นเฉพาะช่วงน่าสนใจ, รับ URL YouTube

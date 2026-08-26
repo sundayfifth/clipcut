@@ -5,6 +5,15 @@ const shotsEl = el("shots");
 const stepEl = el("job-step");
 const metaEl = el("job-meta");
 const progressBar = el("progress-bar");
+const summaryEl = el("summary");
+const renderPanel = el("render-panel");
+const renderBtn = el("render-btn");
+const renderStep = el("render-step");
+const renderProgressWrap = el("render-progress-wrap");
+const renderProgress = el("render-progress");
+const renderResult = el("render-result");
+
+let currentJobId = null;
 
 let pollTimer = null;
 
@@ -87,7 +96,13 @@ function showError(message) {
 
 function watch(jobId) {
   clearInterval(pollTimer);
+  currentJobId = jobId;
   resultPanel.hidden = false;
+  renderPanel.hidden = true;
+  summaryEl.hidden = true;
+  renderResult.textContent = "";
+  renderStep.textContent = "";
+  renderProgressWrap.hidden = true;
   shotsEl.innerHTML = "";
   metaEl.innerHTML = "";
 
@@ -95,7 +110,7 @@ function watch(jobId) {
     try {
       const job = await api(`/api/jobs/${jobId}`);
       render(job);
-      if (job.status === "done" || job.status === "error") clearInterval(pollTimer);
+      if (["ready", "done", "error"].includes(job.status)) clearInterval(pollTimer);
     } catch (err) {
       clearInterval(pollTimer);
       showError(err.message);
@@ -123,7 +138,18 @@ function render(job) {
       ` · <span class="level">แบ่งแบบ${level}</span>`;
   }
 
-  // วาดใหม่เฉพาะการ์ดที่ยังไม่มี เพื่อไม่ให้ภาพกระพริบตอน poll
+  if (job.summary) {
+    summaryEl.hidden = false;
+    summaryEl.innerHTML =
+      `<span class="pill pill-crop">crop ${job.summary.crop} ซีน</span>` +
+      `<span class="pill pill-pad">ย่อ+เติมพื้นหลัง ${job.summary.pad} ซีน</span>`;
+  }
+  if (["ready", "done"].includes(job.status)) {
+    renderPanel.hidden = false;
+    renderBtn.disabled = false;
+  }
+
+  // วาดใหม่เฉพาะการ์ดที่เปลี่ยน เพื่อไม่ให้ภาพกระพริบตอน poll
   for (const shot of job.shots) {
     let card = shotsEl.querySelector(`[data-shot="${shot.index}"]`);
     if (!card) {
@@ -132,20 +158,78 @@ function render(job) {
       card.dataset.shot = shot.index;
       shotsEl.appendChild(card);
     }
+    const p = shot.plan;
+    const key = `${shot.thumbnail || ""}|${p ? p.mode : ""}`;
+    if (card.dataset.key === key) continue;
+    card.dataset.key = key;
+
     const img = shot.thumbnail
       ? `<img src="${shot.thumbnail}" alt="ซีน ${shot.index + 1}" loading="lazy" />`
       : `<div class="thumb-missing">ไม่มีภาพ</div>`;
-    const wanted = card.dataset.thumb || "";
-    if (wanted !== (shot.thumbnail || "")) {
-      card.dataset.thumb = shot.thumbnail || "";
-      card.innerHTML = `${img}<figcaption>
-        <span class="shot-no">ซีน ${shot.index + 1}</span>
-        <span class="shot-time">${fmt(shot.start)} → ${fmt(shot.end)}</span>
-        <span class="shot-dur">${shot.duration.toFixed(1)} วิ</span>
-      </figcaption>`;
+
+    let decision = "";
+    if (p) {
+      const isCrop = p.mode === "crop";
+      decision = `<div class="decision">
+        <button type="button" class="mode ${isCrop ? "mode-crop" : "mode-pad"}"
+                data-index="${shot.index}" data-mode="${isCrop ? "pad" : "crop"}"
+                title="กดเพื่อสลับ">${isCrop ? "crop" : "ย่อ+เติมพื้นหลัง"}</button>
+        <span class="reason">${p.reason}</span>
+      </div>`;
     }
+
+    card.innerHTML = `${img}<figcaption>
+      <span class="shot-no">ซีน ${shot.index + 1}</span>
+      <span class="shot-time">${fmt(shot.start)} → ${fmt(shot.end)}</span>
+      <span class="shot-dur">${shot.duration.toFixed(1)} วิ</span>
+    </figcaption>${decision}`;
   }
 }
+
+shotsEl.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".mode");
+  if (!btn || !currentJobId) return;
+  btn.disabled = true;
+  try {
+    const job = await api(
+      `/api/jobs/${currentJobId}/shots/${btn.dataset.index}/mode?mode=${btn.dataset.mode}`,
+      { method: "POST" },
+    );
+    render(job);
+  } catch (err) {
+    showError(err.message);
+  }
+});
+
+renderBtn.onclick = async () => {
+  if (!currentJobId) return;
+  renderBtn.disabled = true;
+  renderResult.textContent = "";
+  renderProgressWrap.hidden = false;
+  try {
+    await api(`/api/jobs/${currentJobId}/render`, { method: "POST" });
+  } catch (err) {
+    showError(err.message);
+    return;
+  }
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const job = await api(`/api/jobs/${currentJobId}`);
+    renderProgress.style.width = `${job.progress * 100}%`;
+    renderStep.textContent = job.step;
+    if (job.status === "done") {
+      clearInterval(pollTimer);
+      renderBtn.disabled = false;
+      renderResult.innerHTML =
+        `เสร็จแล้ว — <a href="/api/jobs/${job.id}/output">ดาวน์โหลดไฟล์</a>` +
+        `<br /><span class="path">${job.output}</span>`;
+    } else if (job.status === "error") {
+      clearInterval(pollTimer);
+      renderBtn.disabled = false;
+      renderResult.innerHTML = `<span class="error">${job.error}</span>`;
+    }
+  }, 700);
+};
 
 el("sensitivity").onchange = () => {
   // ถ้าเพิ่งวิเคราะห์ไฟล์ไหนไป ให้ลองระดับใหม่กับไฟล์เดิมเลย

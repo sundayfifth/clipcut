@@ -125,3 +125,32 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 }
 .sensitivity-hint { margin: .4rem 0 0; }
 .level { color: var(--accent); }
+
+.summary { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.pill {
+  font-size: .8rem; padding: .25rem .6rem; border-radius: 999px;
+  border: 1px solid var(--line);
+}
+.pill-crop { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.pill-pad { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+
+.decision {
+  padding: .5rem .75rem .7rem;
+  border-top: 1px solid var(--line);
+  display: grid; gap: .35rem;
+}
+.mode {
+  justify-self: start;
+  font-size: .78rem; padding: .2rem .6rem; border-radius: 999px;
+}
+.mode-crop { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.mode-pad { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.mode:disabled { opacity: .5; cursor: wait; }
+.reason { font-size: .75rem; color: var(--muted); line-height: 1.4; }
+
+button.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+button.primary:disabled { opacity: .5; cursor: wait; }
+
+.result { margin: .75rem 0 0; font-size: .9rem; }
+.result a { color: var(--accent); }
+.path { color: var(--muted); font-size: .8rem; font-family: ui-monospace, Menlo, monospace; }
