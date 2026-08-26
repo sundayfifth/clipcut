@@ -476,7 +476,7 @@ input[type="range"]::-moz-range-thumb {
 .frame-keep {
   position: absolute;
   top: 0;
-  bottom: 0;
+  height: 100%;
   border: 2px solid var(--crop);
   border-radius: 2px;
   box-shadow: 0 0 0 9999px oklch(0 0 0 / 0.45);

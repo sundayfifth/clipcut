@@ -56,6 +56,8 @@ class Job:
     output: str | None = None
     checklist: str | None = None
     source_url: str | None = None
+    # วินาทีที่น่าจะเห็นซับชัดสุด ใช้เป็นเฟรมตั้งต้นของ preview แถบซับ
+    subtitle_hint: float = 0.0
     # เก็บผลตรวจจับไว้ เพื่อคำนวณแผนใหม่ตอนคนขยับแถบซับได้ทันทีโดยไม่ต้องตรวจซ้ำ
     detections: list[ShotDetections] = field(default_factory=list)
     # ประวัติ plan สำหรับ undo — งานตรวจ 40 กว่าซีนพลาดทีนึงแล้วย้อนไม่ได้คือฝันร้าย
@@ -77,6 +79,7 @@ class Job:
             "checklist": self.checklist,
             "can_undo": bool(self.history),
             "bands": (self.plan or {}).get("bands"),
+            "subtitle_hint": self.subtitle_hint,
             "summary": (self.plan or {}).get("summary"),
             "shots": [
                 {**shot_to_dict(s), "plan": by_index.get(s.index)} for s in self.shots
@@ -132,6 +135,7 @@ class JobStore:
             "output": job.output,
             "checklist": job.checklist,
             "detections": detections_to_dict(job.detections),
+            "subtitle_hint": job.subtitle_hint,
         }
         tmp = dest.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -156,6 +160,7 @@ class JobStore:
                     output=data.get("output"), checklist=data.get("checklist"),
                     shots=[shot_from_dict(x) for x in data["shots"]],
                     detections=detections_from_dict(data.get("detections", [])),
+                    subtitle_hint=data.get("subtitle_hint", 0.0),
                 )
                 with self._lock:
                     self._jobs[job.id] = job
@@ -352,6 +357,7 @@ class JobStore:
             job.step = "ตัดสินว่าซีนไหน crop ได้ ซีนไหนต้องย่อ"
             job.detections = detections
             job.plan = build_plan(job.source, info, shots, detections)
+            job.subtitle_hint = _subtitle_hint(shots, detections)
             _write_plan(self.work_dir / job.id / "edit-plan.json", job.plan)
 
             s = job.plan["summary"]
@@ -416,6 +422,19 @@ def _info_from(job: Job):
 
     i = job.info
     return VideoInfo(width=i["width"], height=i["height"], duration=i["duration"], fps=i["fps"])
+
+
+def _subtitle_hint(shots: list[Shot], detections: list[ShotDetections]) -> float:
+    """เดาว่าควรโชว์เฟรมไหนตอนตั้งแถบซับ
+
+    ซับที่ burn มามักอยู่บนซีนที่คนพูด ไม่ใช่ b-roll หรือสกรีนช็อต
+    จึงเลือกซีนที่ยาวสุดในบรรดาซีนที่เจอคนแทบทุกเฟรม
+    (เคยลองหาจากความหนาแน่นของขอบแล้วมันไปเลือกสกรีนช็อต Google แทน)
+    """
+    by_index = {d.shot_index: d for d in detections}
+    talking = [s for s in shots if by_index.get(s.index) and by_index[s.index].hit_rate >= 0.8]
+    pick = max(talking or shots, key=lambda s: s.duration, default=None)
+    return round(pick.midpoint, 2) if pick else 0.0
 
 
 def _base_from_center(plan: dict, bands, info) -> dict:

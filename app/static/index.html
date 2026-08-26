@@ -62,6 +62,15 @@
           <figcaption id="preview-caption" class="preview-caption"></figcaption>
         </figure>
 
+        <div class="field-group">
+          <label class="label label-row" for="preview-at">
+            เฟรมที่ดู <output id="preview-at-out">0:00</output>
+          </label>
+          <input type="range" id="preview-at" min="0" max="100" step="0.5" value="0"
+                 aria-label="เลือกวินาทีของเฟรมตัวอย่าง" />
+          <p class="hint">เลื่อนหาเฟรมที่เห็นซับชัดๆ ก่อนตั้งแถบ</p>
+        </div>
+
         <div class="seg" role="group" aria-label="วิธีจัดการแถบ">
           <button type="button" class="seg-btn is-on" data-band-mode="trim">ตัดทิ้ง</button>
           <button type="button" class="seg-btn" data-band-mode="blur">เบลอทับ</button>
@@ -123,10 +132,6 @@
             <button type="button" class="btn btn-quiet btn-sm" id="undo-btn" disabled>
               ย้อนกลับ
             </button>
-            <div class="seg seg-inline" role="group" aria-label="มุมมอง">
-              <button type="button" class="seg-btn" data-view="source">ภาพต้นฉบับ</button>
-              <button type="button" class="seg-btn is-on" data-view="result">ผลลัพธ์ 9:16</button>
-            </div>
           </div>
         </div>
 
@@ -146,7 +151,8 @@
         </div>
 
         <p class="kbd-hint">
-          เลื่อนเมาส์ผ่านภาพเพื่อดูซีนเคลื่อนไหว · <strong>ลากบนภาพเพื่อขยับกรอบ</strong> หมุนล้อเพื่อซูม
+          เลื่อนเมาส์ผ่านภาพเพื่อดูซีนเคลื่อนไหว · <strong>ลากบนภาพเพื่อขยับกรอบ</strong>
+          (ตอนลากจะเห็นภาพเต็มว่ากำลังตัดจากตรงไหน) หมุนล้อเพื่อซูม
           · <kbd>Space</kbd> เลือก <kbd>C</kbd> เต็มจอ <kbd>P</kbd> ย่อทั้งภาพ <kbd>⌘Z</kbd> ย้อนกลับ
         </p>
 

@@ -47,6 +47,8 @@ const ui = {
   ribbon: el("ribbon"),
   undoBtn: el("undo-btn"),
   cancelBtn: el("cancel-btn"),
+  previewAt: el("preview-at"),
+  previewAtOut: el("preview-at-out"),
 };
 
 let jobId = null;
@@ -54,7 +56,7 @@ let poll = null;
 let bandMode = "trim";
 let previewTimer = null;
 let lastShotKeys = new Map();
-let view = "result";   // result = พรีวิว 9:16 · source = ภาพต้นฉบับพร้อมกรอบ
+let view = "result";   // ปกติโชว์ผลลัพธ์ 9:16 · สลับเป็น source ชั่วคราวตอนลากกรอบ
 let filter = "all";
 let lastJob = null;
 
@@ -143,6 +145,8 @@ function enterWorking() {
   ui.done.hidden = true;
   ui.renderTrack.hidden = true;
   ui.shots.innerHTML = "";
+  ui.previewAt.max = "100";
+  ui.previewImg.removeAttribute("src");
   lastShotKeys = new Map();
   showSkeletons();
   setFill(ui.jobProgress, 0);
@@ -252,6 +256,12 @@ function draw(job) {
   ui.bandGroup.hidden = false;
 
   if (job.bands) syncBandInputs(job.bands);
+  if (ui.previewAt.max === "100" && job.info) {
+    // ตั้งช่วงสไลเดอร์ตามความยาวคลิป แล้วเด้งไปเฟรมที่น่าจะเห็นซับ
+    ui.previewAt.max = String(Math.max(1, Math.floor(job.info.duration)));
+    ui.previewAt.value = String(job.subtitle_hint || 0);
+    updatePreviewAtLabel();
+  }
   if (!ui.previewImg.getAttribute("src")) refreshPreview();
 
   const i = job.info;
@@ -603,7 +613,7 @@ function refreshPreview() {
   if (!jobId) return;
   const top = Number(ui.bandTop.value) / 100;
   const bottom = Number(ui.bandBottom.value) / 100;
-  const at = 8; // เอาเฟรมช่วงต้นคลิป มักมีซับขึ้นแล้ว
+  const at = Number(ui.previewAt.value);
   ui.previewImg.src =
     `/api/jobs/${jobId}/preview?at=${at}&top=${top}&bottom=${bottom}&mode=${bandMode}` +
     `&_=${Date.now()}`;
@@ -702,6 +712,8 @@ function applyLive(index, adjust) {
   if (keep) {
     keep.style.left = `${(crop.x / src.width) * 100}%`;
     keep.style.width = `${(crop.w / src.width) * 100}%`;
+    keep.style.top = `${(crop.y / src.height) * 100}%`;
+    keep.style.height = `${(crop.h / src.height) * 100}%`;
   }
   const reset = card.querySelector(".tune-reset");
   if (reset) {
@@ -740,12 +752,12 @@ ui.shots.addEventListener("pointerdown", (e) => {
 
   const box = scrub.getBoundingClientRect();
   drag = {
-    index, scrub, box, moved: false,
+    index, scrub, box, moved: false, card,
     startX: e.clientX, startY: e.clientY,
     from: currentAdjust(index),
     base: plan.crop_base,
   };
-  scrub.setPointerCapture(e.pointerId);
+  try { scrub.setPointerCapture(e.pointerId); } catch { /* ไม่ critical */ }
 });
 
 ui.shots.addEventListener("pointermove", (e) => {
@@ -762,27 +774,58 @@ ui.shots.addEventListener("pointermove", (e) => {
   const dxPx = e.clientX - drag.startX;
   const dyPx = e.clientY - drag.startY;
   if (!drag.moved && Math.abs(dxPx) + Math.abs(dyPx) < 3) return;
-  drag.moved = true;
-  drag.scrub.classList.add("is-dragging");
 
-  const crop = deriveCrop(drag.base, drag.from, lastJob.info);
+  if (!drag.moved) {
+    drag.moved = true;
+    drag.scrub.classList.add("is-dragging");
+    // สลับให้เห็นภาพเต็มพร้อมกรอบ จะได้รู้ว่ากำลังดึงมาจากตรงไหนของเฟรม
+    showContext(drag);
+  }
+
+  const src = lastJob.info;
+  const crop = deriveCrop(drag.base, drag.from, src);
   const next = { ...drag.from };
-  next.dx = drag.from.dx - (dxPx * (crop.w / drag.box.width)) / drag.base.w;
+
+  // ในภาพเต็ม สิ่งที่มือจับคือ "กรอบ" ลากซ้ายกรอบต้องไปซ้าย
+  // ในผลลัพธ์ 9:16 สิ่งที่มือจับคือ "ภาพ" ลากซ้ายแล้วเห็นของทางขวา (แบบแผนที่)
+  // ตอนนี้ลากทีไรก็เห็นภาพเต็ม จึงใช้ทิศของกรอบ
+  const perPxX = src.width / drag.box.width;
+  next.dx = drag.from.dx + (dxPx * perPxX) / drag.base.w;
   if (drag.from.scale < 0.999) {
-    next.dy = drag.from.dy - (dyPx * (crop.h / drag.box.height)) / (drag.base.h / 2);
+    const perPxY = src.height / drag.box.height;
+    next.dy = drag.from.dy + (dyPx * perPxY) / (drag.base.h / 2);
   }
   next.dx = Math.max(-1, Math.min(1, next.dx));
   next.dy = Math.max(-1, Math.min(1, next.dy));
   applyLive(drag.index, next);
 });
 
+/* ระหว่างลาก สลับการ์ดไปโชว์ภาพเต็ม + กรอบสีเขียว แล้วคืนค่าเมื่อปล่อย */
+function showContext(d) {
+  const shot = lastJob.shots.find((x) => x.index === Number(d.index));
+  const plan = shot && shot.plan;
+  if (!shot || !plan) return;
+  const holder = d.scrub;
+  holder.dataset.wasResult = "1";
+  const n = shot.frames || 1;
+  const at = Number(holder.dataset.at) || 0;
+  holder.innerHTML =
+    sourceView(shot, n, plan, lastJob.info, lastJob.bands) +
+    `<span class="scrub-bar" aria-hidden="true"><i style="transform:scaleX(${1 / n})"></i></span>`;
+  showFrame(holder, at);
+  d.box = holder.getBoundingClientRect();
+}
+
 function endDrag(e) {
   if (!drag) return;
   const { index, moved, scrub } = drag;
   drag = null;
   scrub.classList.remove("is-dragging");
-  if (e) scrub.releasePointerCapture?.(e.pointerId);
-  if (moved) commitAdjust(index);
+  // ปล่อย capture ต้องไม่บล็อกการบันทึก ไม่งั้นค่าที่ลากไว้หายเงียบๆ
+  try { if (e) scrub.releasePointerCapture?.(e.pointerId); } catch { /* ไม่ critical */ }
+  if (!moved) return;
+  lastShotKeys.delete(Number(index));  // บังคับวาดใหม่ให้กลับไปเป็นผลลัพธ์ 9:16
+  commitAdjust(index);
 }
 ui.shots.addEventListener("pointerup", endDrag);
 ui.shots.addEventListener("pointercancel", endDrag);
@@ -830,17 +873,6 @@ ui.shots.addEventListener("pointerleave", (e) => {
   const scrub = e.target.closest && e.target.closest(".scrub");
   if (scrub && !drag) showFrame(scrub, 0);
 }, true);
-
-for (const btn of document.querySelectorAll("[data-view]")) {
-  btn.onclick = () => {
-    view = btn.dataset.view;
-    for (const other of document.querySelectorAll("[data-view]")) {
-      other.classList.toggle("is-on", other === btn);
-    }
-    lastShotKeys = new Map();
-    if (lastJob) draw(lastJob);
-  };
-}
 
 for (const btn of document.querySelectorAll("[data-filter]")) {
   btn.onclick = () => {
@@ -989,6 +1021,15 @@ ui.dropzone.addEventListener("drop", (e) => {
   ui.dropzone.classList.remove("is-over");
   const file = e.dataTransfer.files[0];
   if (file) uploadFile(file);
+});
+
+function updatePreviewAtLabel() {
+  ui.previewAtOut.textContent = tc(Number(ui.previewAt.value)).replace(/\.\d$/, "");
+}
+
+ui.previewAt.addEventListener("input", () => {
+  updatePreviewAtLabel();
+  schedulePreview();
 });
 
 ui.bandTop.addEventListener("input", schedulePreview);

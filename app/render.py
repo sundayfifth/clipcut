@@ -19,6 +19,10 @@ from app.bands import Bands, band_filter
 VIDEO_ARGS = ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p"]
 AUDIO_ARGS = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
 
+# เฟดสั้นมากที่หัวท้ายทุก segment — ตัดกลางคำแล้วต่อกันดิบๆ จะได้ยินเสียง "แป๊ก"
+# สั้นพอที่จะไม่รู้สึกว่าเสียงขาด แต่ยาวพอกัน waveform กระโดด
+EDGE_FADE = 0.012
+
 BLUR_SIGMA = 25
 
 
@@ -95,6 +99,11 @@ def render_shot(
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     duration = shot_plan["end"] - shot_plan["start"]
+    fade = min(EDGE_FADE, duration / 4)
+    af = (
+        f"afade=t=in:st=0:d={fade:.4f},"
+        f"afade=t=out:st={max(0.0, duration - fade):.4f}:d={fade:.4f}"
+    )
     cmd = [
         "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
         "-accurate_seek", "-ss", f"{shot_plan['start']:.3f}",
@@ -102,6 +111,7 @@ def render_shot(
         "-t", f"{duration:.3f}",
         "-filter_complex", f"[0:v]{vf}[v]",
         "-map", "[v]", "-map", "0:a?",
+        "-af", af,
         *VIDEO_ARGS, *AUDIO_ARGS,
         str(dest),
     ]
