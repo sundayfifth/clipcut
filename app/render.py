@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 from app.analyze import AnalyzeError
+from app.bands import Bands, band_filter
 
 # ตั้งให้ตรงกันทุก segment ไม่งั้น concat แล้วภาพ/เสียงเพี้ยน
 VIDEO_ARGS = ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p"]
@@ -21,9 +22,29 @@ AUDIO_ARGS = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
 BLUR_SIGMA = 25
 
 
-def _crop_filter(crop: dict, tw: int, th: int) -> str:
+def _path_expression(crop: dict, path: dict | None) -> str:
+    """ตำแหน่ง x ของกรอบ — คงที่ หรือขยับตาม polynomial ที่ fit ไว้ทั้ง shot
+
+    ffmpeg ประเมิน expression ใหม่ทุกเฟรม ใช้ t เป็นวินาทีนับจากต้น segment
+    clip() กันไม่ให้กรอบหลุดออกนอกภาพตอนเส้นแกว่งช่วงปลาย
+    """
+    if not path or path.get("kind") != "poly":
+        return str(crop["x"])
+
+    terms = []
+    for power, c in enumerate(path["coeffs"]):
+        if power == 0:
+            terms.append(f"{c:.6f}")
+        else:
+            terms.append(f"{c:.6f}*" + "*".join(["t"] * power))
+    centre = "+".join(terms).replace("+-", "-")
+    return f"clip(({centre})-{crop['w'] / 2:.1f},0,in_w-out_w)"
+
+
+def _crop_filter(crop: dict, path: dict | None, tw: int, th: int) -> str:
+    x = _path_expression(crop, path)
     return (
-        f"crop={crop['w']}:{crop['h']}:{crop['x']}:{crop['y']},"
+        f"crop={crop['w']}:{crop['h']}:'{x}':{crop['y']},"
         f"scale={tw}:{th}:flags=lanczos,setsar=1"
     )
 
@@ -39,12 +60,28 @@ def _pad_filter(tw: int, th: int) -> str:
     )
 
 
-def render_shot(source: Path, shot_plan: dict, target: dict, dest: Path) -> None:
+def render_shot(
+    source: Path, shot_plan: dict, target: dict, dest: Path,
+    bands: Bands | None = None, source_size: dict | None = None,
+) -> None:
     tw, th = target["width"], target["height"]
+
+    stages = []
+    # โหมด trim ตัดแถบทิ้งก่อน ทำให้กรอบที่ plan คำนวณไว้อ้างอิงภาพหลังตัดแล้ว
+    if bands and bands.active and source_size:
+        pre = band_filter(bands, source_size["width"], source_size["height"])
+        if pre:
+            stages.append(pre)
+            if bands.mode == "trim":
+                # crop ซ้อน crop — y ถูกหักไปกับ stage แรกแล้ว
+                shot_plan = {**shot_plan, "crop": {**shot_plan["crop"], "y": 0}} \
+                    if shot_plan.get("crop") else shot_plan
+
     if shot_plan["mode"] == "crop":
-        vf = _crop_filter(shot_plan["crop"], tw, th)
+        stages.append(_crop_filter(shot_plan["crop"], shot_plan.get("path"), tw, th))
     else:
-        vf = _pad_filter(tw, th)
+        stages.append(_pad_filter(tw, th))
+    vf = ",".join(stages) if len(stages) == 1 else _join_stages(stages)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     duration = shot_plan["end"] - shot_plan["start"]
@@ -88,14 +125,33 @@ def concat(segments: list[Path], dest: Path) -> None:
         raise AnalyzeError(f"ต่อไฟล์ไม่สำเร็จ: {result.stderr.strip()[:300]}")
 
 
+def _join_stages(stages: list[str]) -> str:
+    """ต่อ filter หลาย stage — stage ที่มี label ในตัว (blur band) ต่อด้วย ; ไม่ใช่ ,"""
+    out = ""
+    for i, stage in enumerate(stages):
+        if i == 0:
+            out = stage
+        elif ";" in out or ";" in stage:
+            out = f"{out}[s{i}];[s{i}]{stage}"
+        else:
+            out = f"{out},{stage}"
+    return out
+
+
 def render_plan(source: Path, plan: dict, work_dir: Path, dest: Path, on_progress=None) -> Path:
     segments_dir = work_dir / "segments"
     segments: list[Path] = []
-    shots = plan["shots"]
+    shots = [s for s in plan["shots"] if s.get("included", True)]
+    if not shots:
+        raise AnalyzeError("ยังไม่ได้เลือกซีนไหนเลย — เลือกอย่างน้อย 1 ซีนก่อน")
 
+    bands = Bands.from_dict(plan.get("bands"))
     for i, shot_plan in enumerate(shots, start=1):
         seg = segments_dir / f"seg-{shot_plan['shot_index']:04d}.mp4"
-        render_shot(source, shot_plan, plan["target_size"], seg)
+        render_shot(
+            source, shot_plan, plan["target_size"], seg,
+            bands=bands, source_size=plan.get("source_size"),
+        )
         segments.append(seg)
         if on_progress:
             on_progress(i / len(shots))

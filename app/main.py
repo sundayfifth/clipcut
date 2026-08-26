@@ -1,17 +1,18 @@
 """clipcut — local web app สำหรับแปลงคลิป 16:9 เป็น 9:16
 
-ตอนนี้ทำได้ถึงขั้น: เลือกไฟล์ -> หา shot -> โชว์ภาพตัวอย่างต่อ shot
-ขั้นต่อไป (ยังไม่ทำ): ตรวจจับตัวคน, ตัดสิน crop-vs-pad, render
+เส้นทางเต็ม: รับไฟล์/URL -> แบ่งซีน -> ตรวจจับคน -> ตั้งแถบซับ -> เลือกซีน
+-> ตัดสิน crop/pad ต่อซีน -> render mp4 9:16 + checklist กราฟฟิก
 """
 
+import subprocess
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.analyze import DEFAULT_SENSITIVITY, SENSITIVITY
-from app.analyze import AnalyzeError
+from app.analyze import AnalyzeError, DEFAULT_SENSITIVITY, SENSITIVITY
+from app.bands import Bands, band_filter
 from app.jobs import JobStore
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,7 +28,7 @@ for _sub in ("input", "work", "output"):
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
-app = FastAPI(title="clipcut", version="0.3.0")
+app = FastAPI(title="clipcut", version="0.4.0")
 jobs = JobStore(WORK_DIR, OUTPUT_DIR)
 
 
@@ -91,6 +92,16 @@ def create_job(name: str, sensitivity: str = DEFAULT_SENSITIVITY) -> dict:
     return jobs.submit(_resolve_source(name), level).as_dict()
 
 
+@app.post("/api/youtube")
+def create_job_from_url(url: str, sensitivity: str = DEFAULT_SENSITIVITY) -> dict:
+    """โหลดคลิปจาก YouTube แล้ววิเคราะห์ต่อเลย"""
+    level = _check_sensitivity(sensitivity)
+    try:
+        return jobs.submit_url(url, INPUT_DIR, level).as_dict()
+    except AnalyzeError as err:
+        raise HTTPException(400, str(err)) from err
+
+
 @app.post("/api/upload")
 async def upload(file: UploadFile, sensitivity: str = DEFAULT_SENSITIVITY) -> dict:
     """อัปโหลดไฟล์เข้า media/input/ แล้วเริ่มวิเคราะห์เลย"""
@@ -137,6 +148,66 @@ def set_shot_mode(job_id: str, shot_index: int, mode: str) -> dict:
     except AnalyzeError as err:
         raise HTTPException(400, str(err)) from err
     return job.as_dict()
+
+
+@app.post("/api/jobs/{job_id}/shots/{shot_index}/included")
+def set_shot_included(job_id: str, shot_index: int, included: bool) -> dict:
+    """เลือกว่าจะเอาซีนนี้ไปประกอบเป็นไฟล์ 9:16 มั้ย — ค่าตั้งต้นคือเอาทั้งหมด"""
+    job = _require_job(job_id)
+    try:
+        jobs.set_included(job, shot_index, included)
+    except AnalyzeError as err:
+        raise HTTPException(400, str(err)) from err
+    return job.as_dict()
+
+
+@app.post("/api/jobs/{job_id}/bands")
+def set_bands(job_id: str, top: float = 0.0, bottom: float = 0.0, mode: str = "trim") -> dict:
+    """ตั้งแถบซับ/โลโก้ที่จะตัดหรือเบลอ แล้วคำนวณแผนใหม่ทันที"""
+    job = _require_job(job_id)
+    try:
+        jobs.set_bands(job, Bands(top=top, bottom=bottom, mode=mode))
+    except (AnalyzeError, ValueError) as err:
+        raise HTTPException(400, str(err)) from err
+    return job.as_dict()
+
+
+@app.get("/api/jobs/{job_id}/preview")
+def preview_bands(job_id: str, at: float = 0.0, top: float = 0.0,
+                  bottom: float = 0.0, mode: str = "trim") -> FileResponse:
+    """เฟรมตัวอย่างที่ใส่แถบแล้ว ให้เลื่อนสไลเดอร์แล้วเห็นผลทันที"""
+    job = _require_job(job_id)
+    if not job.info:
+        raise HTTPException(400, "ยังอ่านข้อมูลไฟล์ไม่เสร็จ")
+    try:
+        bands = Bands(top=top, bottom=bottom, mode=mode)
+    except ValueError as err:
+        raise HTTPException(400, str(err)) from err
+
+    dest = WORK_DIR / job_id / "preview.jpg"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    chain = band_filter(bands, job.info["width"], job.info["height"])
+    vf = f"[0:v]{chain},scale=640:-2[v]" if chain else "[0:v]scale=640:-2[v]"
+
+    result = subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-ss", f"{max(0.0, at):.3f}", "-i", str(job.source),
+            "-frames:v", "1", "-filter_complex", vf, "-map", "[v]", str(dest),
+        ],
+        capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0 or not dest.exists():
+        raise HTTPException(500, "สร้างภาพตัวอย่างไม่สำเร็จ")
+    return FileResponse(dest, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/jobs/{job_id}/checklist")
+def download_checklist(job_id: str) -> FileResponse:
+    job = _require_job(job_id)
+    if not job.checklist or not Path(job.checklist).is_file():
+        raise HTTPException(404, "ยังไม่มี checklist — ต้อง render ก่อน")
+    return FileResponse(job.checklist, filename=Path(job.checklist).name)
 
 
 @app.post("/api/jobs/{job_id}/render")

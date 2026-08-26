@@ -185,3 +185,113 @@ def test_bad_sensitivity_is_rejected(sample):
     # พารามิเตอร์ผิดต้องได้ 400 แม้ไฟล์จะไม่มีอยู่จริง
     res = client.post("/api/jobs", params={"name": "x.mp4", "sensitivity": "nope"})
     assert res.status_code == 400
+
+
+# ── แถบซับ / โลโก้ ────────────────────────────────────────────
+
+def test_trim_shrinks_the_usable_height_but_blur_does_not():
+    from app.bands import Bands
+
+    assert Bands(bottom=0.13, mode="trim").effective_height(720) == 626
+    assert Bands(bottom=0.13, mode="blur").effective_height(720) == 720
+
+
+def test_band_values_are_clamped_and_bad_mode_rejected():
+    from app.bands import Bands
+
+    assert Bands(top=-1).top == 0.0
+    assert Bands(top=9).top == 0.45  # เกิน 45% แปลว่าตั้งผิด ไม่ใช่แถบซับแล้ว
+    with pytest.raises(ValueError):
+        Bands(mode="หมุน")
+
+
+def test_band_filter_is_none_when_nothing_to_do():
+    from app.bands import Bands, band_filter
+
+    assert band_filter(Bands(), 1280, 720) is None
+
+
+def test_trim_makes_the_crop_window_narrower(sample):
+    """ตัดแถบล่างแล้วกรอบ 9:16 ต้องแคบลงตามความสูงที่เหลือ"""
+    from app.analyze import probe
+    from app.bands import Bands
+    from app.detect import ShotDetections
+    from app.plan import plan_shot
+
+    info = probe(sample)
+    shot = detect_shots(sample)[0]
+    empty = ShotDetections(shot_index=shot.index, frames_sampled=5, frames_with_person=0, per_frame=[])
+
+    plain = plan_shot(shot, info, empty)
+    trimmed = plan_shot(shot, info, empty, Bands(bottom=0.2, mode="trim"))
+    # ไม่เจอคน -> pad ทั้งคู่ แต่ความสูงที่ใช้ได้ต้องต่างกัน
+    assert plain.mode == trimmed.mode == "pad"
+    assert Bands(bottom=0.2, mode="trim").effective_height(info.height) < info.height
+
+
+# ── เลือกซีน ─────────────────────────────────────────────────
+
+def test_shots_default_to_all_selected_and_can_be_deselected(sample):
+    dest = INPUT_DIR / "pytest-select.mp4"
+    shutil.copy(sample, dest)
+    try:
+        job = client.post("/api/jobs", params={"name": dest.name}).json()
+        job = _wait(job["id"], "ready")
+        assert job["summary"]["included"] == job["summary"]["total"] == 3
+
+        job = client.post(
+            f"/api/jobs/{job['id']}/shots/1/included", params={"included": False}
+        ).json()
+        assert job["summary"]["included"] == 2
+        assert job["shots"][1]["plan"]["included"] is False
+
+        # ไม่เลือกเลยแล้ว render ต้องถูกปฏิเสธพร้อมข้อความที่อ่านรู้เรื่อง
+        for i in (0, 2):
+            job = client.post(
+                f"/api/jobs/{job['id']}/shots/{i}/included", params={"included": False}
+            ).json()
+        assert job["summary"]["included"] == 0
+        client.post(f"/api/jobs/{job['id']}/render")
+        job = _wait(job["id"], "done", timeout=30)
+        assert job["status"] == "error"
+        assert "เลือก" in job["error"]
+    finally:
+        dest.unlink(missing_ok=True)
+
+
+# ── YouTube ──────────────────────────────────────────────────
+
+def test_only_youtube_urls_are_accepted():
+    from app.ingest import is_youtube_url
+
+    assert is_youtube_url("https://www.youtube.com/watch?v=abc")
+    assert is_youtube_url("https://youtu.be/abc")
+    assert not is_youtube_url("https://vimeo.com/123")
+    assert not is_youtube_url("ไม่ใช่ url")
+    assert client.post("/api/youtube", params={"url": "https://vimeo.com/1"}).status_code == 400
+
+
+# ── checklist ────────────────────────────────────────────────
+
+def test_checklist_names_what_the_editor_must_redo():
+    from app.report import build_checklist
+
+    plan = {
+        "source": "a.mp4",
+        "source_size": {"width": 1280, "height": 720},
+        "target_size": {"width": 1080, "height": 1920},
+        "bands": {"top": 0.0, "bottom": 0.13, "mode": "trim"},
+        "summary": {"total": 2, "included": 1, "crop": 1, "pad": 0, "duration": 2.0},
+        "shots": [
+            {"shot_index": 0, "start": 0.0, "end": 2.0, "mode": "crop", "reason": "x",
+             "crop": {"x": 400, "y": 0, "w": 405, "h": 720}, "confidence": 0.9,
+             "included": True, "path": {"kind": "poly", "coeffs": [1.0]}},
+            {"shot_index": 1, "start": 2.0, "end": 4.0, "mode": "pad", "reason": "y",
+             "crop": None, "confidence": 0.0, "included": False, "path": None},
+        ],
+    }
+    text = build_checklist(plan)
+    assert "ซับไตเติล" in text            # แถบถูกตัด -> ต้องใส่ซับใหม่
+    assert "subtitle-align" in text        # ชี้ไปที่ skill ที่มีอยู่
+    assert "ตัดข้างซ้าย 400px" in text     # บอกว่าหายไปเท่าไหร่
+    assert "ซีนที่ข้ามไป" in text          # ซีนที่ไม่ได้เลือกต้องถูกระบุ

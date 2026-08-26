@@ -20,7 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+import numpy as np
+
 from app.analyze import Shot, VideoInfo
+from app.bands import Bands
 from app.detect import Box, ShotDetections
 
 # ขนาด output มาตรฐานของ TikTok
@@ -40,6 +43,12 @@ CO_SUBJECT_AREA_RATIO = 0.40
 # ถ้ามี subject ร่วมที่ครอบไม่ไหวเกินสัดส่วนนี้ของเฟรม ให้ pad
 CO_SUBJECT_FRAME_RATIO = 0.50
 
+# ขยับน้อยกว่านี้ถือว่านิ่ง ใช้กรอบคงที่ไปเลย — กล้องที่ขยับนิดเดียวดูกวนตามากกว่านิ่งสนิท
+STATIC_THRESHOLD_PX = 24.0
+
+# ดีกรีสูงสุดของเส้นทางกล้อง ต่ำไว้กันเส้นแกว่งตอน extrapolate (งานวิจัย: AutoFlip ใช้ 4)
+MAX_PATH_DEGREE = 3
+
 
 @dataclass
 class ShotPlan:
@@ -48,8 +57,10 @@ class ShotPlan:
     end: float
     mode: str  # "crop" | "pad"
     reason: str
-    crop: dict | None  # {x, y, w, h} ในหน่วย pixel ของต้นฉบับ (เฉพาะ mode=crop)
+    crop: dict | None  # {x, y, w, h} ในหน่วย pixel (เฉพาะ mode=crop)
     confidence: float  # สัดส่วนเฟรมที่เจอคน
+    included: bool = True  # เอาซีนนี้ไปประกอบเป็นไฟล์ 9:16 มั้ย
+    path: dict | None = None  # เส้นทางกล้อง {kind: static|poly, coeffs: [...]}
 
     def as_dict(self) -> dict:
         return {**asdict(self), "duration": round(self.end - self.start, 3)}
@@ -68,6 +79,25 @@ def _percentile(values: list[float], q: float) -> float:
     return ordered[low] + (ordered[high] - ordered[low]) * (pos - low)
 
 
+def _fit_path(times: list[float], centers: list[float]) -> dict | None:
+    """fit เส้นทางกล้องเป็น polynomial ดีกรีต่ำ ตามที่ AutoFlip ทำ
+
+    งานวิจัยบอกว่าอย่า smooth กรอบทีละเฟรม (jitter) และอย่าใช้ EMA (กรอบจะไหลไม่หยุด)
+    ให้ fit เส้นทั้ง shot ทีเดียว — ดู docs/2026-08-25-research-auto-reframe.md
+    """
+    if len(times) < 4:
+        return None
+    degree = min(MAX_PATH_DEGREE, len(times) - 1)
+    try:
+        coeffs = np.polyfit(np.array(times), np.array(centers), degree)
+    except Exception:
+        return None
+    if not np.all(np.isfinite(coeffs)):
+        return None
+    # polyfit คืนดีกรีสูงก่อน กลับด้านให้เป็น c0 + c1*t + c2*t^2 ... อ่านง่ายฝั่ง render
+    return {"kind": "poly", "coeffs": [float(c) for c in reversed(coeffs)]}
+
+
 def _co_subject_conflicts(frames: list[list[Box]], crop_w: float) -> float:
     """สัดส่วนเฟรมที่มี subject ร่วมอยู่ไกลจนกรอบเดียวครอบทั้งคู่ไม่ได้"""
     conflicts = 0
@@ -84,13 +114,17 @@ def _co_subject_conflicts(frames: list[list[Box]], crop_w: float) -> float:
     return conflicts / len(frames) if frames else 0.0
 
 
-def plan_shot(shot: Shot, info: VideoInfo, dets: ShotDetections) -> ShotPlan:
-    # กรอบ 9:16 ที่ครอบได้มากที่สุดจากเฟรมต้นฉบับ
-    crop_h = info.height
+def plan_shot(
+    shot: Shot, info: VideoInfo, dets: ShotDetections, bands: Bands | None = None
+) -> ShotPlan:
+    bands = bands or Bands()
+    # แถบที่ตัดทิ้งทำให้ความสูงที่ใช้ได้ลดลง กรอบ 9:16 จึงแคบลงตาม
+    crop_h = bands.effective_height(info.height)
+    crop_y = bands.offset_y(info.height)
     crop_w = crop_h * TARGET_RATIO
     if crop_w > info.width:  # ต้นฉบับแคบกว่า 9:16 อยู่แล้ว
         crop_w = info.width
-        crop_h = crop_w / TARGET_RATIO
+        crop_h = min(crop_h, int(crop_w / TARGET_RATIO))
 
     common = {
         "shot_index": shot.index,
@@ -112,7 +146,7 @@ def plan_shot(shot: Shot, info: VideoInfo, dets: ShotDetections) -> ShotPlan:
             crop=None, **common,
         )
 
-    conflict_rate = _co_subject_conflicts(dets.per_frame, crop_w)
+    conflict_rate = _co_subject_conflicts(dets.boxes, crop_w)
     if conflict_rate >= CO_SUBJECT_FRAME_RATIO:
         return ShotPlan(
             mode="pad",
@@ -121,7 +155,8 @@ def plan_shot(shot: Shot, info: VideoInfo, dets: ShotDetections) -> ShotPlan:
         )
 
     # ติดตามเฉพาะ subject หลัก (คนตัวใหญ่สุดในเฟรม)
-    centers = [boxes[0].center_x for boxes in dets.per_frame]
+    times = [t for t, _ in dets.per_frame]
+    centers = [boxes[0].center_x for _, boxes in dets.per_frame]
     lo, hi = _percentile(centers, 0.10), _percentile(centers, 0.90)
     drift = hi - lo
 
@@ -132,38 +167,66 @@ def plan_shot(shot: Shot, info: VideoInfo, dets: ShotDetections) -> ShotPlan:
             crop=None, **common,
         )
 
-    # crop ได้ — วางกรอบไว้กลางช่วงที่ subject อยู่ แล้วดันกลับเข้าเฟรมถ้าล้น
     left = (lo + hi) / 2 - crop_w / 2
     left = max(0.0, min(left, info.width - crop_w))
+    crop = {
+        "x": int(round(left)),
+        "y": crop_y,
+        "w": int(round(crop_w)),
+        "h": int(round(crop_h)),
+    }
+
+    if drift <= STATIC_THRESHOLD_PX:
+        return ShotPlan(
+            mode="crop",
+            reason=f"คนอยู่นิ่ง ({drift:.0f}px) ใช้กรอบคงที่",
+            crop=crop, path={"kind": "static"}, **common,
+        )
+
+    path = _fit_path(times, centers)
+    if path is None:
+        return ShotPlan(
+            mode="crop",
+            reason=f"ตาม subject หลักได้ (ขยับ {drift:.0f}px ในกรอบ {crop_w:.0f}px)",
+            crop=crop, path={"kind": "static"}, **common,
+        )
 
     return ShotPlan(
         mode="crop",
-        reason=f"ตาม subject หลักได้ (ขยับ {drift:.0f}px ในกรอบ {crop_w:.0f}px)",
-        crop={
-            "x": int(round(left)),
-            "y": 0,
-            "w": int(round(crop_w)),
-            "h": int(round(crop_h)),
-        },
-        **common,
+        reason=f"กรอบขยับตามคน ({drift:.0f}px) แบบลื่นทั้งซีน",
+        crop=crop, path=path, **common,
     )
 
 
+def summarise(shots: list[dict]) -> dict:
+    included = [s for s in shots if s.get("included", True)]
+    return {
+        "total": len(shots),
+        "included": len(included),
+        "crop": sum(1 for s in included if s["mode"] == "crop"),
+        "pad": sum(1 for s in included if s["mode"] == "pad"),
+        "duration": round(sum(s["end"] - s["start"] for s in included), 2),
+    }
+
+
 def build_plan(
-    source: Path, info: VideoInfo, shots: list[Shot], detections: list[ShotDetections]
+    source: Path,
+    info: VideoInfo,
+    shots: list[Shot],
+    detections: list[ShotDetections],
+    bands: Bands | None = None,
 ) -> dict:
     """edit plan — contract กลางที่ทุก module คุยกันผ่านมัน (ดู CLAUDE.md)"""
+    bands = bands or Bands()
     by_index = {d.shot_index: d for d in detections}
-    plans = [plan_shot(s, info, by_index[s.index]) for s in shots]
+    plans = [plan_shot(s, info, by_index[s.index], bands) for s in shots]
+    shot_dicts = [p.as_dict() for p in plans]
     return {
-        "version": 1,
+        "version": 2,
         "source": source.name,
         "source_size": {"width": info.width, "height": info.height},
         "target_size": {"width": TARGET_WIDTH, "height": TARGET_HEIGHT},
-        "shots": [p.as_dict() for p in plans],
-        "summary": {
-            "total": len(plans),
-            "crop": sum(1 for p in plans if p.mode == "crop"),
-            "pad": sum(1 for p in plans if p.mode == "pad"),
-        },
+        "bands": bands.as_dict(),
+        "shots": shot_dicts,
+        "summary": summarise(shot_dicts),
     }

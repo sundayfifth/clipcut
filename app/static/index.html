@@ -7,58 +7,141 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <header>
-    <h1>clipcut</h1>
-    <p class="tagline">แปลงคลิป 16:9 เป็น 9:16 สำหรับ TikTok</p>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">clipcut</span>
+    </div>
+    <p class="brand-sub">แปลงคลิปแนวนอนเป็น 9:16 สำหรับ TikTok</p>
   </header>
 
-  <main>
-    <section class="panel">
-      <h2>1. เลือกคลิป</h2>
-      <p class="hint">วางไฟล์ไว้ใน <code>media/input/</code> แล้วกดปุ่ม หรือลากไฟล์มาวางตรงนี้</p>
+  <div class="shell">
+    <!-- ───────────────────────── ด้านซ้าย: ตั้งค่า ───────────────────────── -->
+    <aside class="rail">
+      <section class="group">
+        <h2 class="group-title">คลิปต้นฉบับ</h2>
 
-      <div id="dropzone" class="dropzone">
-        <input type="file" id="file-input" accept="video/*" hidden />
-        <button type="button" id="browse">เลือกไฟล์จากเครื่อง</button>
-        <span class="drop-hint">หรือลากไฟล์มาวาง</span>
+        <div id="dropzone" class="dropzone">
+          <input type="file" id="file-input" accept="video/*" hidden />
+          <p class="dropzone-lead">ลากไฟล์มาวาง</p>
+          <button type="button" id="browse" class="btn btn-quiet">เลือกจากเครื่อง</button>
+        </div>
+
+        <form id="url-form" class="url-row">
+          <input type="url" id="url-input" class="field" placeholder="หรือวางลิงก์ YouTube"
+                 autocomplete="off" spellcheck="false" />
+          <button type="submit" class="btn btn-quiet" id="url-btn">โหลด</button>
+        </form>
+
+        <div class="field-group">
+          <label class="label" for="sensitivity">ความละเอียดในการแบ่งซีน</label>
+          <select id="sensitivity" class="field">
+            <option value="coarse">หยาบ — เฉพาะรอยตัดชัด</option>
+            <option value="normal">ปกติ</option>
+            <option value="fine" selected>ละเอียด</option>
+            <option value="finest">ละเอียดมาก — จับฉากที่เปลี่ยนเนียน</option>
+          </select>
+          <p class="hint">แบ่งถี่เกินให้เลื่อนลงหยาบ ซีนที่ควรแยกแต่ไม่แยกให้เลื่อนขึ้น</p>
+        </div>
+
+        <div id="sources" class="sources" role="list"></div>
+      </section>
+
+      <!-- แถบซับ: โผล่เมื่อวิเคราะห์เสร็จแล้วเท่านั้น -->
+      <section class="group" id="band-group" hidden>
+        <h2 class="group-title">ตัดซับ / โลโก้เดิม</h2>
+        <p class="hint hint-lead">
+          ซับที่ติดมากับต้นฉบับจะโดน crop ขาดกลางประโยค ตัดแถบทิ้งแล้วใส่ซับใหม่ทีหลังจะเนียนกว่า
+        </p>
+
+        <figure class="preview">
+          <img id="preview-img" alt="ตัวอย่างเฟรมหลังตัดแถบ" />
+          <figcaption id="preview-caption" class="preview-caption"></figcaption>
+        </figure>
+
+        <div class="seg" role="group" aria-label="วิธีจัดการแถบ">
+          <button type="button" class="seg-btn is-on" data-band-mode="trim">ตัดทิ้ง</button>
+          <button type="button" class="seg-btn" data-band-mode="blur">เบลอทับ</button>
+        </div>
+
+        <div class="field-group">
+          <label class="label label-row" for="band-top">
+            แถบบน <output id="band-top-out">0%</output>
+          </label>
+          <input type="range" id="band-top" min="0" max="40" step="1" value="0" />
+        </div>
+
+        <div class="field-group">
+          <label class="label label-row" for="band-bottom">
+            แถบล่าง <output id="band-bottom-out">0%</output>
+          </label>
+          <input type="range" id="band-bottom" min="0" max="40" step="1" value="0" />
+        </div>
+
+        <button type="button" id="band-apply" class="btn btn-quiet btn-block">
+          ใช้ค่านี้แล้วคำนวณใหม่
+        </button>
+      </section>
+    </aside>
+
+    <!-- ───────────────────────── ด้านขวา: งานหลัก ───────────────────────── -->
+    <main class="stage">
+      <!-- ยังไม่ได้เลือกคลิป -->
+      <div class="empty" id="empty">
+        <h2>เริ่มจากเลือกคลิป</h2>
+        <p>
+          วางไฟล์ไว้ใน <code>media/input/</code> แล้วเลือกจากรายการทางซ้าย
+          ลากไฟล์มาวาง หรือวางลิงก์ YouTube ก็ได้
+        </p>
+        <p class="empty-note">
+          เครื่องมือจะแบ่งซีนให้เอง หาว่าซีนไหน crop ตามตัวคนได้
+          ซีนไหนต้องย่อลงแล้วเติมพื้นหลัง แล้วให้คุณตรวจก่อนสร้างไฟล์
+        </p>
       </div>
 
-      <div class="sensitivity">
-        <label for="sensitivity">ความละเอียดในการแบ่งซีน</label>
-        <select id="sensitivity">
-          <option value="coarse">หยาบ — เฉพาะรอยตัดชัดๆ</option>
-          <option value="normal">ปกติ</option>
-          <option value="fine" selected>ละเอียด</option>
-          <option value="finest">ละเอียดมาก — จับฉากที่เปลี่ยนแบบเนียนด้วย</option>
-        </select>
-        <p class="hint sensitivity-hint">ถ้าแบ่งถี่เกินให้เลื่อนลงมาหยาบ ถ้าซีนไหนควรแยกแต่ไม่แยกให้เลื่อนขึ้นไปละเอียด</p>
+      <!-- กำลังทำงาน -->
+      <div class="working" id="working" hidden>
+        <div class="working-head">
+          <p class="working-step" id="job-step">กำลังเริ่ม</p>
+          <p class="working-meta" id="job-meta"></p>
+        </div>
+        <div class="track"><div class="track-fill" id="job-progress"></div></div>
+        <div class="skeletons" id="skeletons" aria-hidden="true"></div>
       </div>
 
-      <div id="sources" class="sources"></div>
-    </section>
+      <!-- ผลลัพธ์ -->
+      <section class="results" id="results" hidden>
+        <div class="results-head">
+          <div>
+            <h2 class="results-title">ซีนที่พบ</h2>
+            <p class="results-meta" id="results-meta"></p>
+          </div>
+          <div class="results-actions">
+            <button type="button" class="btn btn-quiet btn-sm" data-select="all">เลือกทั้งหมด</button>
+            <button type="button" class="btn btn-quiet btn-sm" data-select="none">ไม่เลือกเลย</button>
+          </div>
+        </div>
+        <div class="shots" id="shots"></div>
+      </section>
 
-    <section class="panel" id="result-panel" hidden>
-      <h2>2. ซีนที่พบ</h2>
-      <div id="job-meta" class="meta"></div>
-      <div id="progress-wrap" class="progress-wrap">
-        <div id="progress-bar" class="progress-bar"></div>
-      </div>
-      <p id="job-step" class="step"></p>
-      <div id="summary" class="summary" hidden></div>
-      <div id="shots" class="shots"></div>
-    </section>
+      <p class="error-note" id="error-note" hidden></p>
+    </main>
+  </div>
 
-    <section class="panel" id="render-panel" hidden>
-      <h2>3. สร้างไฟล์ 9:16</h2>
-      <p class="hint">ตรวจการตัดสินของแต่ละซีนด้านบนให้เรียบร้อยก่อน แล้วค่อยกดสร้าง</p>
-      <button type="button" id="render-btn" class="primary">สร้างไฟล์</button>
-      <p id="render-step" class="step"></p>
-      <div id="render-progress-wrap" class="progress-wrap" hidden>
-        <div id="render-progress" class="progress-bar"></div>
+  <!-- แถบสร้างไฟล์ ติดล่างจอเสมอ ไม่ต้องเลื่อนผ่านการ์ด 40 ใบ -->
+  <footer class="actionbar" id="actionbar" hidden>
+    <div class="actionbar-inner">
+      <div class="tally" id="tally"></div>
+      <div class="actionbar-right">
+        <p class="render-step" id="render-step"></p>
+        <button type="button" id="render-btn" class="btn btn-primary">สร้างไฟล์ 9:16</button>
       </div>
-      <p id="render-result" class="result"></p>
-    </section>
-  </main>
+    </div>
+    <div class="track track-flat" id="render-track" hidden>
+      <div class="track-fill" id="render-progress"></div>
+    </div>
+    <div class="done" id="done" hidden></div>
+  </footer>
 
   <script src="/static/app.js"></script>
 </body>

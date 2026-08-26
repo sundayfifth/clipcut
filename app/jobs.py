@@ -26,9 +26,12 @@ from app.analyze import (
     probe,
     shot_to_dict,
 )
-from app.detect import detect_people
-from app.plan import build_plan
+from app.bands import Bands
+from app.detect import ShotDetections, detect_people
+from app.ingest import download_youtube, is_youtube_url
+from app.plan import build_plan, summarise
 from app.render import render_plan
+from app.report import build_checklist
 
 
 @dataclass
@@ -44,6 +47,10 @@ class Job:
     shots: list[Shot] = field(default_factory=list)
     plan: dict | None = None
     output: str | None = None
+    checklist: str | None = None
+    source_url: str | None = None
+    # เก็บผลตรวจจับไว้ เพื่อคำนวณแผนใหม่ตอนคนขยับแถบซับได้ทันทีโดยไม่ต้องตรวจซ้ำ
+    detections: list[ShotDetections] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         by_index = {s["shot_index"]: s for s in (self.plan or {}).get("shots", [])}
@@ -57,6 +64,8 @@ class Job:
             "error": self.error,
             "info": self.info,
             "output": self.output,
+            "checklist": self.checklist,
+            "bands": (self.plan or {}).get("bands"),
             "summary": (self.plan or {}).get("summary"),
             "shots": [
                 {**shot_to_dict(s), "plan": by_index.get(s.index)} for s in self.shots
@@ -86,6 +95,42 @@ class JobStore:
         threading.Thread(target=self._analyze, args=(job,), daemon=True).start()
         return job
 
+    def submit_url(self, url: str, input_dir: Path, sensitivity: str = DEFAULT_SENSITIVITY) -> Job:
+        if not is_youtube_url(url):
+            raise AnalyzeError("รองรับเฉพาะลิงก์ YouTube เท่านั้น")
+        job = Job(
+            id=uuid.uuid4().hex[:12], source=Path(url), sensitivity=sensitivity, source_url=url
+        )
+        with self._lock:
+            self._jobs[job.id] = job
+        threading.Thread(
+            target=self._download_then_analyze, args=(job, url, input_dir), daemon=True
+        ).start()
+        return job
+
+    def set_bands(self, job: Job, bands: Bands) -> None:
+        """ขยับแถบซับแล้วคำนวณแผนใหม่ทันที — ไม่ต้องตรวจจับคนซ้ำ"""
+        if job.status not in ("ready", "done") or not job.detections:
+            raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะตั้งแถบได้")
+
+        included = {s["shot_index"]: s.get("included", True) for s in job.plan["shots"]}
+        info = _info_from(job)
+        job.plan = build_plan(job.source, info, job.shots, job.detections, bands)
+        for shot_plan in job.plan["shots"]:
+            shot_plan["included"] = included.get(shot_plan["shot_index"], True)
+        job.plan["summary"] = summarise(job.plan["shots"])
+
+    def set_included(self, job: Job, shot_index: int, included: bool) -> None:
+        if job.status not in ("ready", "done"):
+            raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะเลือกซีนได้")
+        for shot_plan in job.plan["shots"]:
+            if shot_plan["shot_index"] == shot_index:
+                shot_plan["included"] = included
+                break
+        else:
+            raise AnalyzeError(f"ไม่พบซีนที่ {shot_index + 1}")
+        job.plan["summary"] = summarise(job.plan["shots"])
+
     def set_mode(self, job: Job, shot_index: int, mode: str) -> None:
         """ให้คนพลิกการตัดสินของเครื่องได้ — pad ที่ควรเป็น crop หรือกลับกัน"""
         if job.status not in ("ready", "done"):
@@ -104,12 +149,7 @@ class JobStore:
         else:
             raise AnalyzeError(f"ไม่พบซีนที่ {shot_index + 1}")
 
-        shots = job.plan["shots"]
-        job.plan["summary"] = {
-            "total": len(shots),
-            "crop": sum(1 for s in shots if s["mode"] == "crop"),
-            "pad": sum(1 for s in shots if s["mode"] == "pad"),
-        }
+        job.plan["summary"] = summarise(job.plan["shots"])
 
     def start_render(self, job: Job) -> None:
         if job.status not in ("ready", "done"):
@@ -117,6 +157,21 @@ class JobStore:
         threading.Thread(target=self._render, args=(job,), daemon=True).start()
 
     # ------------------------------------------------------------------ งานเบื้องหลัง
+
+    def _download_then_analyze(self, job: Job, url: str, input_dir: Path) -> None:
+        try:
+            job.status = "running"
+            job.step = "กำลังโหลดคลิปจาก YouTube"
+            path = download_youtube(
+                url, input_dir,
+                on_progress=lambda p: setattr(job, "progress", p * 0.25),
+            )
+            job.source = path
+            job.progress = 0.25
+        except Exception as err:
+            self._fail(job, err)
+            return
+        self._analyze(job)
 
     def _analyze(self, job: Job) -> None:
         try:
@@ -157,6 +212,7 @@ class JobStore:
             job.progress = 0.92
 
             job.step = "ตัดสินว่าซีนไหน crop ได้ ซีนไหนต้องย่อ"
+            job.detections = detections
             job.plan = build_plan(job.source, info, shots, detections)
             _write_plan(self.work_dir / job.id / "edit-plan.json", job.plan)
 
@@ -185,6 +241,10 @@ class JobStore:
             )
             _write_plan(out_dir / "edit-plan.json", job.plan)
 
+            checklist = out_dir / "graphics-checklist.md"
+            checklist.write_text(build_checklist(job.plan), encoding="utf-8")
+            job.checklist = str(checklist)
+
             job.output = str(dest)
             job.step = f"เสร็จแล้ว — {dest.name}"
             job.status = "done"
@@ -201,6 +261,13 @@ class JobStore:
             job.error = f"เกิดข้อผิดพลาดที่ไม่คาดคิด: {type(err).__name__}"
         job.status = "error"
         job.step = "หยุดเพราะมีปัญหา"
+
+
+def _info_from(job: Job):
+    from app.analyze import VideoInfo
+
+    i = job.info
+    return VideoInfo(width=i["width"], height=i["height"], duration=i["duration"], fps=i["fps"])
 
 
 def _center_crop(plan: dict) -> dict:

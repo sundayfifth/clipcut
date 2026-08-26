@@ -67,10 +67,15 @@ class ShotDetections:
     shot_index: int
     frames_sampled: int
     frames_with_person: int
-    # กรอบคนทุกคนในเฟรม เรียงจากใหญ่ไปเล็ก เก็บเฉพาะเฟรมที่เจอคน
+    # (เวลานับจากต้น shot, กรอบคนทุกคนเรียงจากใหญ่ไปเล็ก) เก็บเฉพาะเฟรมที่เจอคน
     # เก็บแยกคน ไม่ union เพราะการตัดสิน crop ต้องแยกให้ออกว่า
     # "คนเดียวตัวใหญ่" (crop ได้) กับ "สองคนอยู่คนละฝั่ง" (crop ไม่ได้)
-    per_frame: list[list[Box]]
+    # เก็บเวลาไว้ด้วยเพื่อ fit เส้นทางกล้องให้กรอบขยับตามคนได้
+    per_frame: list[tuple[float, list[Box]]]
+
+    @property
+    def boxes(self) -> list[list[Box]]:
+        return [boxes for _, boxes in self.per_frame]
 
     @property
     def hit_rate(self) -> float:
@@ -129,7 +134,8 @@ def detect_people(video: Path, shots: list[Shot], on_progress=None) -> list[Shot
                     boxes = _detect_frame(detector, frame)
                     if boxes:
                         bucket.frames_with_person += 1
-                        bucket.per_frame.append(boxes)
+                        offset = max(0.0, seconds - shots[shot_cursor].start)
+                        bucket.per_frame.append((offset, boxes))
             frame_no += 1
     finally:
         cap.release()
