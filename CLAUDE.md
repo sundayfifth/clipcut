@@ -35,7 +35,10 @@ uvicorn app.main:app --reload
 
 แล้วเปิด http://127.0.0.1:8000
 
-test: `pytest`
+test: `pytest` (ต้องมี ffmpeg — test สร้างคลิปทดสอบเอง)
+
+**สถานะตอนนี้**: ทำได้ถึงขั้นเลือกไฟล์ → หา shot → โชว์ภาพตัวอย่างต่อ shot
+ยังไม่ทำ: ตรวจจับตัวคน, ตัดสิน crop-vs-pad, render, checklist กราฟฟิก
 
 ## Docs
 
