@@ -113,15 +113,35 @@
       <section class="results" id="results" hidden>
         <div class="results-head">
           <div>
-            <h2 class="results-title">ซีนที่พบ</h2>
+            <h2 class="results-title">ตรวจแต่ละซีน</h2>
             <p class="results-meta" id="results-meta"></p>
+          </div>
+          <div class="seg seg-inline" role="group" aria-label="มุมมอง">
+            <button type="button" class="seg-btn" data-view="source">ภาพต้นฉบับ</button>
+            <button type="button" class="seg-btn is-on" data-view="result">ผลลัพธ์ 9:16</button>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="filters" role="group" aria-label="กรองซีน">
+            <button type="button" class="filter is-on" data-filter="all">ทั้งหมด</button>
+            <button type="button" class="filter" data-filter="crop">เต็มจอ</button>
+            <button type="button" class="filter" data-filter="pad">ย่อทั้งภาพ</button>
+            <button type="button" class="filter" data-filter="off">ที่ไม่ได้เลือก</button>
           </div>
           <div class="results-actions">
             <button type="button" class="btn btn-quiet btn-sm" data-select="all">เลือกทั้งหมด</button>
             <button type="button" class="btn btn-quiet btn-sm" data-select="none">ไม่เลือกเลย</button>
           </div>
         </div>
+
+        <p class="kbd-hint">
+          คลิกที่ภาพเพื่อเลือก/ไม่เลือกซีน · กดที่การ์ดแล้วใช้ <kbd>Space</kbd> สลับเลือก
+          <kbd>C</kbd> เต็มจอ <kbd>P</kbd> ย่อทั้งภาพ
+        </p>
+
         <div class="shots" id="shots"></div>
+        <p class="filter-empty" id="filter-empty" hidden>ไม่มีซีนที่ตรงกับตัวกรองนี้</p>
       </section>
 
       <p class="error-note" id="error-note" hidden></p>

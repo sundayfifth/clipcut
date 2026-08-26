@@ -43,6 +43,7 @@ const ui = {
   renderTrack: el("render-track"),
   renderProgress: el("render-progress"),
   done: el("done"),
+  filterEmpty: el("filter-empty"),
 };
 
 let jobId = null;
@@ -50,6 +51,11 @@ let poll = null;
 let bandMode = "trim";
 let previewTimer = null;
 let lastShotKeys = new Map();
+let view = "result";   // result = พรีวิว 9:16 · source = ภาพต้นฉบับพร้อมกรอบ
+let filter = "all";
+let lastJob = null;
+
+const MODE_LABEL = { crop: "เต็มจอ", pad: "ย่อทั้งภาพ" };
 
 /* ── helpers ─────────────────────────────────────────── */
 
@@ -249,16 +255,18 @@ function draw(job) {
   ui.resultsMeta.textContent =
     `${job.name} · ${i.aspect} · ${tc(i.duration)} · ${i.fps} fps`;
 
+  lastJob = job;
   drawTally(job.summary);
   drawShots(job);
+  applyFilter();
 }
 
 function drawTally(summary) {
   if (!summary) return;
   ui.tally.innerHTML =
     `<span class="chip">เลือก ${summary.included}/${summary.total} ซีน</span>` +
-    `<span class="chip chip-crop">crop ${summary.crop}</span>` +
-    `<span class="chip chip-pad">ย่อ+พื้นหลัง ${summary.pad}</span>` +
+    `<span class="chip chip-crop">เต็มจอ ${summary.crop}</span>` +
+    `<span class="chip chip-pad">ย่อทั้งภาพ ${summary.pad}</span>` +
     `<span class="chip">${tc(summary.duration)}</span>`;
   ui.renderBtn.disabled = summary.included === 0;
 }
@@ -268,10 +276,9 @@ function drawShots(job) {
   for (const shot of job.shots) {
     const p = shot.plan;
     const key = [
-      shot.thumbnail || "",
-      p ? p.mode : "",
-      p ? p.included : "",
-      p && p.crop ? `${p.crop.x}:${p.crop.w}` : "",
+      view, shot.thumbnail || "",
+      p ? `${p.mode}|${p.included}` : "",
+      p && p.crop ? `${p.crop.x}:${p.crop.y}:${p.crop.w}:${p.crop.h}` : "",
       job.bands ? `${job.bands.top}:${job.bands.bottom}:${job.bands.mode}` : "",
     ].join("|");
     if (lastShotKeys.get(shot.index) === key) continue;
@@ -282,21 +289,22 @@ function drawShots(job) {
       card = document.createElement("figure");
       card.className = "shot";
       card.dataset.shot = shot.index;
+      card.tabIndex = 0;
       ui.shots.appendChild(card);
     }
 
     const included = !p || p.included !== false;
     card.dataset.included = String(included);
-
-    const media = shot.thumbnail
-      ? `<img src="${shot.thumbnail}" alt="ซีน ${shot.index + 1}" loading="lazy" />`
-      : `<div class="thumb-missing">ไม่มีภาพ</div>`;
+    card.dataset.mode = p ? p.mode : "";
+    card.setAttribute(
+      "aria-label",
+      `ซีน ${shot.index + 1} ${p ? MODE_LABEL[p.mode] : ""} ${included ? "เลือกอยู่" : "ไม่ได้เลือก"}`,
+    );
 
     card.innerHTML = `
-      <label class="shot-pick">
+      <label class="shot-pick shot-media">
         <input type="checkbox" data-index="${shot.index}" ${included ? "checked" : ""} />
-        ${media}
-        ${frameOverlay(p, src, job.bands)}
+        ${mediaFor(shot, p, src, job.bands)}
         <span class="tick" aria-hidden="true">✓</span>
       </label>
       <div class="shot-body">
@@ -305,44 +313,92 @@ function drawShots(job) {
           <span>${tc(shot.start)} → ${tc(shot.end)}</span>
           <span class="shot-dur">${shot.duration.toFixed(1)} วิ</span>
         </div>
-        ${modeButton(shot.index, p)}
+        ${p ? modeSwitch(shot.index, p.mode) : ""}
         ${p ? `<p class="reason">${p.reason}</p>` : ""}
       </div>`;
   }
 }
 
-/* กรอบที่จะถูกเก็บจริง วาดทับ thumbnail — เห็นเลยว่าอะไรจะหาย */
+/* ภาพในการ์ด — สลับได้ระหว่างต้นฉบับ (เห็นว่าจะเสียอะไร) กับผลลัพธ์จริง 9:16 */
+function mediaFor(shot, plan, src, bands) {
+  if (!shot.thumbnail) return `<div class="thumb-missing">ไม่มีภาพ</div>`;
+  if (view === "source" || !plan || !src) {
+    return `<img src="${shot.thumbnail}" alt="ซีน ${shot.index + 1}" loading="lazy" />` +
+      frameOverlay(plan, src, bands);
+  }
+  return plan.mode === "crop" ? cropPreview(shot, plan, src) : padPreview(shot, src, bands);
+}
+
+/* crop: ขยายภาพให้กรอบที่เลือกไว้เต็มกล่อง 9:16 พอดี */
+function cropPreview(shot, plan, src) {
+  const c = plan.crop;
+  const style = [
+    `width:${(src.width / c.w) * 100}%`,
+    `height:${(src.height / c.h) * 100}%`,
+    `left:${(-c.x / c.w) * 100}%`,
+    `top:${(-c.y / c.h) * 100}%`,
+  ].join(";");
+  return `<div class="frame916 frame916-crop">
+    <img src="${shot.thumbnail}" alt="ผลลัพธ์ซีน ${shot.index + 1}" loading="lazy" style="${style}" />
+  </div>`;
+}
+
+/* pad: ภาพเต็มกว้างวางกลาง พื้นหลังเบลอ ตรงกับที่ ffmpeg เรนเดอร์จริง */
+function padPreview(shot, src, bands) {
+  // โหมดตัดแถบทำให้ภาพที่เหลือเตี้ยลง กล่องที่วางกลางจึงเตี้ยตาม
+  const top = bands && bands.mode === "trim" ? bands.top : 0;
+  const bottom = bands && bands.mode === "trim" ? bands.bottom : 0;
+  const keep = Math.max(0.05, 1 - top - bottom);
+  const visibleRatio = src.width / (src.height * keep);
+  const fgHeightPct = ((9 / 16) / visibleRatio) * 100;
+
+  return `<div class="frame916 frame916-pad">
+    <img class="bg" src="${shot.thumbnail}" alt="" aria-hidden="true" loading="lazy" />
+    <span class="fg" style="top:${(100 - fgHeightPct) / 2}%;height:${fgHeightPct}%">
+      <img src="${shot.thumbnail}" alt="ผลลัพธ์ซีน ${shot.index + 1}" loading="lazy"
+           style="left:0;width:100%;height:${(1 / keep) * 100}%;top:${(-top / keep) * 100}%" />
+    </span>
+  </div>`;
+}
+
+/* กรอบที่จะถูกเก็บจริง วาดทับภาพต้นฉบับ */
 function frameOverlay(plan, src, bands) {
   if (!plan || !src) return "";
   const pieces = [];
-
-  if (bands && (bands.top > 0 || bands.bottom > 0)) {
-    if (bands.top > 0) {
-      pieces.push(`<span class="frame-band" style="top:0;height:${bands.top * 100}%"></span>`);
-    }
-    if (bands.bottom > 0) {
-      pieces.push(`<span class="frame-band" style="bottom:0;height:${bands.bottom * 100}%"></span>`);
-    }
+  if (bands && bands.top > 0) {
+    pieces.push(`<span class="frame-band" style="top:0;height:${bands.top * 100}%"></span>`);
   }
-
+  if (bands && bands.bottom > 0) {
+    pieces.push(`<span class="frame-band" style="bottom:0;height:${bands.bottom * 100}%"></span>`);
+  }
   if (plan.mode === "crop" && plan.crop) {
-    const left = (plan.crop.x / src.width) * 100;
-    const width = (plan.crop.w / src.width) * 100;
     pieces.push(
-      `<span class="frame-keep" style="left:${left}%;width:${width}%"></span>`,
+      `<span class="frame-keep" style="left:${(plan.crop.x / src.width) * 100}%;` +
+      `width:${(plan.crop.w / src.width) * 100}%"></span>`,
     );
   }
-
   return pieces.length ? `<span class="frame">${pieces.join("")}</span>` : "";
 }
 
-function modeButton(index, plan) {
-  if (!plan) return "";
-  const isCrop = plan.mode === "crop";
-  return `<button type="button" class="mode ${isCrop ? "mode-crop" : "mode-pad"}"
-      data-index="${index}" data-mode="${isCrop ? "pad" : "crop"}"
-      title="กดเพื่อสลับเป็น${isCrop ? "ย่อ+เติมพื้นหลัง" : "crop"}"
-    >${isCrop ? "crop" : "ย่อ+เติมพื้นหลัง"}</button>`;
+function modeSwitch(index, mode) {
+  return `<div class="switch" role="group" aria-label="วิธีแปลงซีนนี้">` +
+    ["crop", "pad"].map((m) =>
+      `<button type="button" data-index="${index}" data-mode="${m}" ` +
+      `aria-pressed="${mode === m}">${MODE_LABEL[m]}</button>`).join("") +
+    `</div>`;
+}
+
+function applyFilter() {
+  let shown = 0;
+  for (const card of ui.shots.querySelectorAll(".shot")) {
+    const ok =
+      filter === "all" ? true :
+      filter === "off" ? card.dataset.included !== "true" :
+      card.dataset.mode === filter;
+    card.hidden = !ok;
+    if (ok) shown += 1;
+  }
+  ui.filterEmpty.hidden = shown > 0;
 }
 
 /* ── แถบซับ ──────────────────────────────────────────── */
@@ -409,35 +465,79 @@ async function applyBands() {
 
 /* ── การกระทำบนการ์ด ─────────────────────────────────── */
 
-ui.shots.addEventListener("click", async (e) => {
-  const btn = e.target.closest(".mode");
-  if (!btn || !jobId) return;
-  e.preventDefault();
-  btn.disabled = true;
+async function setMode(index, mode) {
+  if (!jobId) return;
+  try {
+    draw(await api(`/api/jobs/${jobId}/shots/${index}/mode?mode=${mode}`, { method: "POST" }));
+  } catch (err) {
+    showError(err.message);
+  }
+}
+
+async function setIncluded(index, included) {
+  if (!jobId) return;
   try {
     draw(await api(
-      `/api/jobs/${jobId}/shots/${btn.dataset.index}/mode?mode=${btn.dataset.mode}`,
+      `/api/jobs/${jobId}/shots/${index}/included?included=${included}`,
       { method: "POST" },
     ));
   } catch (err) {
     showError(err.message);
-    btn.disabled = false;
+  }
+}
+
+ui.shots.addEventListener("click", (e) => {
+  const btn = e.target.closest(".switch button");
+  if (!btn) return;
+  e.preventDefault();
+  if (btn.getAttribute("aria-pressed") !== "true") setMode(btn.dataset.index, btn.dataset.mode);
+});
+
+ui.shots.addEventListener("change", (e) => {
+  const box = e.target.closest('input[type="checkbox"]');
+  if (box) setIncluded(box.dataset.index, box.checked);
+});
+
+/* คีย์ลัด — งานนี้ต้องไล่ตรวจ 40 กว่าซีนต่อคลิป การใช้เมาส์อย่างเดียวช้าเกินไป */
+ui.shots.addEventListener("keydown", (e) => {
+  const card = e.target.closest(".shot");
+  if (!card || e.metaKey || e.ctrlKey || e.altKey) return;
+  const index = card.dataset.shot;
+  const key = e.key.toLowerCase();
+
+  if (e.key === " ") {
+    e.preventDefault();
+    setIncluded(index, card.dataset.included !== "true");
+  } else if (key === "c" || key === "p") {
+    e.preventDefault();
+    setMode(index, key === "c" ? "crop" : "pad");
+  } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    const cards = [...ui.shots.querySelectorAll(".shot:not([hidden])")];
+    const next = cards[cards.indexOf(card) + (e.key === "ArrowRight" ? 1 : -1)];
+    if (next) { e.preventDefault(); next.focus(); }
   }
 });
 
-ui.shots.addEventListener("change", async (e) => {
-  const box = e.target.closest('input[type="checkbox"]');
-  if (!box || !jobId) return;
-  try {
-    draw(await api(
-      `/api/jobs/${jobId}/shots/${box.dataset.index}/included?included=${box.checked}`,
-      { method: "POST" },
-    ));
-  } catch (err) {
-    showError(err.message);
-    box.checked = !box.checked;
-  }
-});
+for (const btn of document.querySelectorAll("[data-view]")) {
+  btn.onclick = () => {
+    view = btn.dataset.view;
+    for (const other of document.querySelectorAll("[data-view]")) {
+      other.classList.toggle("is-on", other === btn);
+    }
+    lastShotKeys = new Map();
+    if (lastJob) draw(lastJob);
+  };
+}
+
+for (const btn of document.querySelectorAll("[data-filter]")) {
+  btn.onclick = () => {
+    filter = btn.dataset.filter;
+    for (const other of document.querySelectorAll("[data-filter]")) {
+      other.classList.toggle("is-on", other === btn);
+    }
+    applyFilter();
+  };
+}
 
 for (const btn of document.querySelectorAll("[data-select]")) {
   btn.onclick = async () => {
