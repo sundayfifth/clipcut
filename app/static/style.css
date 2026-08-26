@@ -879,3 +879,30 @@ kbd {
   border-color: var(--warn);
   background: var(--warn-soft);
 }
+
+/* ── ข้อเสนอแถบซับ ─────────────────────────────────── */
+
+.suggest {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+}
+.suggest-text { margin: 0; font-size: 0.78125rem; color: var(--ink); line-height: 1.4; }
+.suggest .btn { flex-shrink: 0; }
+
+/* กล่องข้อความที่อ่านเจอในเฟรม */
+.frame-text {
+  position: absolute;
+  border: 1px solid oklch(0.85 0.14 90 / 0.85);
+  border-radius: 2px;
+}
+.frame-text.is-lost {
+  border-color: var(--danger);
+  background: oklch(0.72 0.17 25 / 0.18);
+}
+
+.warn-text { color: var(--warn); }

@@ -49,6 +49,9 @@ const ui = {
   cancelBtn: el("cancel-btn"),
   previewAt: el("preview-at"),
   previewAtOut: el("preview-at-out"),
+  suggest: el("suggest"),
+  suggestText: el("suggest-text"),
+  suggestApply: el("suggest-apply"),
 };
 
 let jobId = null;
@@ -255,6 +258,7 @@ function draw(job) {
   ui.actionbar.hidden = false;
   ui.bandGroup.hidden = false;
 
+  drawSuggestion(job);
   if (job.bands) syncBandInputs(job.bands);
   if (ui.previewAt.max === "100" && job.info) {
     // ตั้งช่วงสไลเดอร์ตามความยาวคลิป แล้วเด้งไปเฟรมที่น่าจะเห็นซับ
@@ -313,6 +317,44 @@ ui.ribbon.addEventListener("click", (e) => {
   setTimeout(() => card.classList.remove("is-flash"), 900);
 });
 
+/* ข้อเสนอแถบซับที่ได้จากการอ่านข้อความจริงในคลิป — ไม่ใส่ให้เอง เพราะเดาพลาดได้
+   (คลิปที่มีสกรีนช็อตเยอะเคยถูกแนะนำให้ตัดทิ้งครึ่งจอ) */
+function drawSuggestion(job) {
+  const sug = job.suggested_bands;
+  const bands = job.bands || {};
+  if (!sug || (!sug.top && !sug.bottom)) {
+    ui.suggest.hidden = true;
+    return;
+  }
+  // สไลเดอร์ปัดเป็นจำนวนเต็ม % ค่าที่ใส่จริงจึงต่างจากที่แนะนำได้ถึง 1 จุด
+  const same =
+    Math.abs((bands.top || 0) - sug.top) <= 0.011 &&
+    Math.abs((bands.bottom || 0) - sug.bottom) <= 0.011;
+  ui.suggest.hidden = same;
+  if (same) return;
+
+  const parts = [];
+  if (sug.top) parts.push(`บน ${Math.round(sug.top * 100)}%`);
+  if (sug.bottom) parts.push(`ล่าง ${Math.round(sug.bottom * 100)}%`);
+  ui.suggestText.textContent = `จากข้อความที่อ่านได้ในคลิป แนะนำตัด ${parts.join(" · ")}`;
+  ui.suggestApply.dataset.top = String(sug.top);
+  ui.suggestApply.dataset.bottom = String(sug.bottom);
+}
+
+ui.suggestApply.onclick = async () => {
+  if (!jobId) return;
+  ui.suggestApply.disabled = true;
+  try {
+    ui.bandTop.value = String(Math.round(Number(ui.suggestApply.dataset.top) * 100));
+    ui.bandBottom.value = String(Math.round(Number(ui.suggestApply.dataset.bottom) * 100));
+    updateBandOutputs();
+    refreshPreview();
+    await applyBands();
+  } finally {
+    ui.suggestApply.disabled = false;
+  }
+};
+
 function drawTally(summary) {
   if (!summary) return;
   ui.tally.innerHTML =
@@ -332,7 +374,7 @@ function drawShots(job) {
     const p = shot.plan;
     const key = [
       view, shot.thumbnail || "",
-      p ? `${p.mode}|${p.included}|${p.has_speech}` : "",
+      p ? `${p.mode}|${p.included}|${p.has_speech}|${lostText(p).length}` : "",
       p && p.crop ? `${p.crop.x}:${p.crop.y}:${p.crop.w}:${p.crop.h}` : "",
       p && p.adjust ? `${p.adjust.dx}:${p.adjust.dy}:${p.adjust.scale}` : "",
       job.bands ? `${job.bands.top}:${job.bands.bottom}:${job.bands.mode}` : "",
@@ -378,6 +420,7 @@ function drawShots(job) {
         ${!included && p && p.has_speech
           ? `<p class="warn">ซีนนี้มีคนพูดอยู่ ตัดออกแล้วประโยคจะขาดกลางคัน</p>`
           : p ? `<p class="reason">${p.reason}</p>` : ""}
+        ${lostTextNote(p)}
       </div>`;
   }
 }
@@ -500,6 +543,13 @@ function frameOverlay(plan, src, bands) {
   if (bands && bands.bottom > 0) {
     pieces.push(`<span class="frame-band" style="bottom:0;height:${bands.bottom * 100}%"></span>`);
   }
+  for (const box of plan.text_boxes || []) {
+    pieces.push(
+      `<span class="frame-text${box.lost ? " is-lost" : ""}" style="` +
+      `left:${box.x0 * 100}%;top:${box.y0 * 100}%;` +
+      `width:${(box.x1 - box.x0) * 100}%;height:${(box.y1 - box.y0) * 100}%"></span>`,
+    );
+  }
   if (plan.mode === "crop" && plan.crop) {
     pieces.push(
       `<span class="frame-keep" style="left:${(plan.crop.x / src.width) * 100}%;` +
@@ -548,6 +598,19 @@ function planOf(index) {
   if (!lastJob) return null;
   const shot = lastJob.shots.find((s) => s.index === Number(index));
   return shot ? shot.plan : null;
+}
+
+/* ข้อความที่จะหายเพราะ crop ข้าง = กราฟฟิกที่คนต้องไปทำใหม่ */
+function lostText(plan) {
+  return (plan && plan.text_boxes || []).filter((b) => b.lost && b.cause === "crop");
+}
+
+function lostTextNote(plan) {
+  const lost = lostText(plan);
+  if (!lost.length) return "";
+  const sample = lost[0].text.slice(0, 22);
+  return `<p class="warn warn-text">ข้อความจะหาย ${lost.length} จุด — “${sample}${
+    lost[0].text.length > 22 ? "…" : ""}”</p>`;
 }
 
 function modeSwitch(index, mode) {

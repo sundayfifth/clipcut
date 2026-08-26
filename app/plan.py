@@ -67,6 +67,8 @@ class ShotPlan:
     # มีเสียงพูดในซีนนี้มั้ย ใช้เตือนตอนคนจะตัดซีนออก
     has_speech: bool = False
     audio_db: float | None = None
+    # ข้อความที่ burn อยู่ในเฟรม (พิกัด 0-1 อ้างมุมซ้ายบน)
+    text_boxes: list | None = None
 
     def as_dict(self) -> dict:
         return {**asdict(self), "duration": round(self.end - self.start, 3)}
@@ -238,6 +240,36 @@ def plan_shot(
     )
 
 
+def annotate_lost_text(shot_plan: dict, info: VideoInfo, bands: Bands) -> None:
+    """ทำเครื่องหมายว่ากล่องข้อความไหนจะหายไปหลังตัดแถบ/crop
+
+    "หาย" หมายถึงถูกตัดออกไปเกินครึ่งกล่อง — เหลือครึ่งเดียวก็อ่านไม่รู้เรื่องแล้ว
+    """
+    boxes = shot_plan.get("text_boxes") or []
+    if not boxes:
+        return
+
+    top = bands.top
+    bottom = 1.0 - bands.bottom
+    crop = shot_plan.get("crop") if shot_plan.get("mode") == "crop" else None
+    left = crop["x"] / info.width if crop else 0.0
+    right = (crop["x"] + crop["w"]) / info.width if crop else 1.0
+
+    for box in boxes:
+        w = max(1e-6, box["x1"] - box["x0"])
+        h = max(1e-6, box["y1"] - box["y0"])
+        visible_w = max(0.0, min(box["x1"], right) - max(box["x0"], left))
+        visible_h = max(0.0, min(box["y1"], bottom) - max(box["y0"], top))
+        kept = (visible_w / w) * (visible_h / h)
+        box["kept"] = round(kept, 3)
+        box["lost"] = kept < 0.5
+        # แยกให้ออกว่าหายเพราะโดนตัดแถบ (ซับ ซึ่งจะใส่ใหม่อยู่แล้ว)
+        # หรือหายเพราะ crop ข้าง (กราฟฟิก ซึ่งต้องทำใหม่)
+        box["cause"] = (
+            "band" if visible_h / h < 0.5 else "crop" if visible_w / w < 0.5 else ""
+        )
+
+
 def summarise(shots: list[dict]) -> dict:
     included = [s for s in shots if s.get("included", True)]
     dropped_speech = [
@@ -261,6 +293,7 @@ def build_plan(
     detections: list[ShotDetections],
     bands: Bands | None = None,
     audio: dict[int, dict] | None = None,
+    text: dict | None = None,
 ) -> dict:
     """edit plan — contract กลางที่ทุก module คุยกันผ่านมัน (ดู CLAUDE.md)"""
     bands = bands or Bands()
@@ -271,6 +304,8 @@ def build_plan(
         level = (audio or {}).get(d["shot_index"]) or {}
         d["has_speech"] = bool(level.get("has_speech"))
         d["audio_db"] = level.get("db")
+        d["text_boxes"] = [b.as_dict() for b in (text or {}).get(d["shot_index"], [])]
+        annotate_lost_text(d, info, bands)
     return {
         "version": 2,
         "source": source.name,

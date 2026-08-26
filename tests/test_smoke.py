@@ -291,10 +291,57 @@ def test_checklist_names_what_the_editor_must_redo():
         ],
     }
     text = build_checklist(plan)
-    assert "ซับไตเติล" in text            # แถบถูกตัด -> ต้องใส่ซับใหม่
+    assert "ใส่ซับใหม่" in text            # แถบถูกตัด -> ต้องใส่ซับใหม่
     assert "subtitle-align" in text        # ชี้ไปที่ skill ที่มีอยู่
     assert "ตัดข้างซ้าย 400px" in text     # บอกว่าหายไปเท่าไหร่
     assert "ซีนที่ข้ามไป" in text          # ซีนที่ไม่ได้เลือกต้องถูกระบุ
+
+
+def test_checklist_lists_the_actual_text_that_gets_cut_away():
+    """ข้อความที่โดน crop ข้างต้องถูกยกมาให้เห็นตัวจริง ไม่ใช่เตือนลอยๆ"""
+    from app.analyze import VideoInfo
+    from app.bands import Bands
+    from app.plan import annotate_lost_text
+    from app.report import build_checklist
+
+    info = VideoInfo(width=1280, height=720, duration=4, fps=25)
+    shot = {
+        "shot_index": 0, "start": 0.0, "end": 4.0, "mode": "crop", "reason": "x",
+        "crop": {"x": 440, "y": 0, "w": 405, "h": 720}, "confidence": 0.9,
+        "included": True, "path": None,
+        "text_boxes": [
+            # อยู่ริมซ้ายสุด -> โดน crop ตัดหาย
+            {"x0": 0.02, "y0": 0.40, "x1": 0.22, "y1": 0.47,
+             "text": "ราคาเริ่มต้น 1,200", "confidence": 1.0},
+            # อยู่กลางจอ -> รอด
+            {"x0": 0.40, "y0": 0.40, "x1": 0.58, "y1": 0.47,
+             "text": "อยู่กลางจอ", "confidence": 1.0},
+            # อยู่ล่างสุด -> โดนตัดแถบ
+            {"x0": 0.20, "y0": 0.90, "x1": 0.80, "y1": 0.97,
+             "text": "ซับไตเติลบรรทัดนี้", "confidence": 1.0},
+        ],
+    }
+    bands = Bands(bottom=0.12, mode="trim")
+    annotate_lost_text(shot, info, bands)
+
+    by_text = {b["text"]: b for b in shot["text_boxes"]}
+    assert by_text["ราคาเริ่มต้น 1,200"]["lost"] is True
+    assert by_text["ราคาเริ่มต้น 1,200"]["cause"] == "crop"
+    assert by_text["อยู่กลางจอ"]["lost"] is False
+    assert by_text["ซับไตเติลบรรทัดนี้"]["cause"] == "band"
+
+    plan = {
+        "source": "a.mp4",
+        "source_size": {"width": 1280, "height": 720},
+        "target_size": {"width": 1080, "height": 1920},
+        "bands": bands.as_dict(),
+        "summary": {"total": 1, "included": 1, "crop": 1, "pad": 0, "duration": 4.0},
+        "shots": [shot],
+    }
+    out = build_checklist(plan)
+    assert "ราคาเริ่มต้น 1,200" in out          # ยกข้อความจริงมาให้
+    assert "ทำกราฟฟิกใหม่ 1 จุด" in out         # นับเฉพาะที่หายเพราะ crop
+    assert "อยู่กลางจอ" in out                  # ของที่รอดก็บอกว่ารอด
 
 
 # ── ปรับกรอบเอง ──────────────────────────────────────────────

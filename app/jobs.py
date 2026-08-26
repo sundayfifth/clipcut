@@ -40,6 +40,7 @@ from app.ingest import download_youtube, is_youtube_url
 from app.plan import build_plan, clamp_adjust, derive_crop, summarise
 from app.render import RenderCancelled, render_plan
 from app.report import build_checklist
+from app.textdet import TextBox, detect_shots_text, suggest_bands
 
 
 @dataclass
@@ -62,6 +63,8 @@ class Job:
     # เก็บผลตรวจจับไว้ เพื่อคำนวณแผนใหม่ตอนคนขยับแถบซับได้ทันทีโดยไม่ต้องตรวจซ้ำ
     detections: list[ShotDetections] = field(default_factory=list)
     audio: dict = field(default_factory=dict)
+    text: dict = field(default_factory=dict)
+    suggested_bands: dict | None = None
     # ประวัติ plan สำหรับ undo — งานตรวจ 40 กว่าซีนพลาดทีนึงแล้วย้อนไม่ได้คือฝันร้าย
     history: list[dict] = field(default_factory=list)
     cancel: bool = False
@@ -82,6 +85,7 @@ class Job:
             "can_undo": bool(self.history),
             "bands": (self.plan or {}).get("bands"),
             "subtitle_hint": self.subtitle_hint,
+            "suggested_bands": self.suggested_bands,
             "summary": (self.plan or {}).get("summary"),
             "shots": [
                 {**shot_to_dict(s), "plan": by_index.get(s.index)} for s in self.shots
@@ -139,6 +143,8 @@ class JobStore:
             "detections": detections_to_dict(job.detections),
             "subtitle_hint": job.subtitle_hint,
             "audio": {str(k): v for k, v in job.audio.items()},
+            "text": {str(k): [b.as_dict() for b in v] for k, v in job.text.items()},
+            "suggested_bands": job.suggested_bands,
         }
         tmp = dest.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -165,6 +171,11 @@ class JobStore:
                     detections=detections_from_dict(data.get("detections", [])),
                     subtitle_hint=data.get("subtitle_hint", 0.0),
                     audio={int(k): v for k, v in (data.get("audio") or {}).items()},
+                    text={
+                        int(k): [TextBox(**b) for b in v]
+                        for k, v in (data.get("text") or {}).items()
+                    },
+                    suggested_bands=data.get("suggested_bands"),
                 )
                 with self._lock:
                     self._jobs[job.id] = job
@@ -203,7 +214,8 @@ class JobStore:
         keep = {s["shot_index"]: s for s in job.plan["shots"]}
         info = _info_from(job)
         job.plan = build_plan(
-            job.source, info, job.shots, job.detections, bands, audio=job.audio
+            job.source, info, job.shots, job.detections, bands,
+            audio=job.audio, text=job.text,
         )
 
         for shot_plan in job.plan["shots"]:
@@ -360,6 +372,17 @@ class JobStore:
             )
             job.progress = 0.92
 
+            job.step = "หาข้อความที่ติดมากับภาพ"
+            try:
+                job.text = detect_shots_text(
+                    job.source, shots, self.work_dir / job.id,
+                    on_progress=lambda p: setattr(job, "progress", 0.90 + 0.06 * p),
+                )
+                job.suggested_bands = suggest_bands(job.text)
+            except Exception:  # noqa: BLE001 — ตรวจข้อความพลาดไม่ควรล้มทั้งงาน
+                traceback.print_exc()
+                job.text, job.suggested_bands = {}, None
+
             job.step = "วัดระดับเสียงแต่ละซีน"
             try:
                 job.audio = measure_shots(job.source, shots)
@@ -368,7 +391,12 @@ class JobStore:
 
             job.step = "ตัดสินว่าซีนไหน crop ได้ ซีนไหนต้องย่อ"
             job.detections = detections
-            job.plan = build_plan(job.source, info, shots, detections, audio=job.audio)
+            # ไม่ใส่แถบให้เอง — การเดาพลาดได้กับคลิปที่มีสกรีนช็อตเยอะ
+            # โชว์เป็นข้อเสนอให้คนกดรับแทน
+            job.plan = build_plan(
+                job.source, info, shots, detections,
+                audio=job.audio, text=job.text,
+            )
             job.subtitle_hint = _subtitle_hint(shots, detections)
             _write_plan(self.work_dir / job.id / "edit-plan.json", job.plan)
 

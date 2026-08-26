@@ -12,6 +12,9 @@ dependencies = [
     "yt-dlp>=2024.10.22",
     # 1.0.x crash บน macOS (Metal init ใน TensorsToDetectionsCalculator) อย่าอัปข้าม 0.10.x
     "mediapipe>=0.10.35,<1.0",
+    # อ่านข้อความไทยที่ burn ในเฟรม ด้วย Apple Vision (macOS เท่านั้น, MIT)
+    "pyobjc-framework-Vision>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]
