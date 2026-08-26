@@ -23,6 +23,17 @@
         <span class="drop-hint">หรือลากไฟล์มาวาง</span>
       </div>
 
+      <div class="sensitivity">
+        <label for="sensitivity">ความละเอียดในการแบ่งซีน</label>
+        <select id="sensitivity">
+          <option value="coarse">หยาบ — เฉพาะรอยตัดชัดๆ</option>
+          <option value="normal">ปกติ</option>
+          <option value="fine" selected>ละเอียด</option>
+          <option value="finest">ละเอียดมาก — จับฉากที่เปลี่ยนแบบเนียนด้วย</option>
+        </select>
+        <p class="hint sensitivity-hint">ถ้าแบ่งถี่เกินให้เลื่อนลงมาหยาบ ถ้าซีนไหนควรแยกแต่ไม่แยกให้เลื่อนขึ้นไปละเอียด</p>
+      </div>
+
       <div id="sources" class="sources"></div>
     </section>
 

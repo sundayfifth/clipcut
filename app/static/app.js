@@ -8,6 +8,15 @@ const progressBar = el("progress-bar");
 
 let pollTimer = null;
 
+const sensitivity = () => el("sensitivity").value;
+
+const LEVEL_LABEL = {
+  coarse: "หยาบ",
+  normal: "ปกติ",
+  fine: "ละเอียด",
+  finest: "ละเอียดมาก",
+};
+
 const fmt = (s) => {
   const m = Math.floor(s / 60);
   const sec = (s % 60).toFixed(1).padStart(4, "0");
@@ -45,7 +54,10 @@ async function loadSources() {
 
 async function startJob(name) {
   try {
-    const job = await api(`/api/jobs?name=${encodeURIComponent(name)}`, { method: "POST" });
+    const job = await api(
+      `/api/jobs?name=${encodeURIComponent(name)}&sensitivity=${sensitivity()}`,
+      { method: "POST" },
+    );
     watch(job.id);
   } catch (err) {
     showError(err.message);
@@ -58,7 +70,7 @@ async function uploadFile(file) {
   stepEl.textContent = `กำลังอัปโหลด ${file.name}…`;
   resultPanel.hidden = false;
   try {
-    const job = await api("/api/upload", { method: "POST", body: form });
+    const job = await api(`/api/upload?sensitivity=${sensitivity()}`, { method: "POST", body: form });
     loadSources();
     watch(job.id);
   } catch (err) {
@@ -105,7 +117,10 @@ function render(job) {
   if (job.info) {
     const i = job.info;
     const ratio = (i.width / i.height).toFixed(2);
-    metaEl.innerHTML = `<strong>${job.name}</strong> · ${i.aspect} (${ratio}:1) · ${fmt(i.duration)} · ${i.fps} fps`;
+    const level = LEVEL_LABEL[job.sensitivity] || job.sensitivity;
+    metaEl.innerHTML =
+      `<strong>${job.name}</strong> · ${i.aspect} (${ratio}:1) · ${fmt(i.duration)} · ${i.fps} fps` +
+      ` · <span class="level">แบ่งแบบ${level}</span>`;
   }
 
   // วาดใหม่เฉพาะการ์ดที่ยังไม่มี เพื่อไม่ให้ภาพกระพริบตอน poll
@@ -131,6 +146,12 @@ function render(job) {
     }
   }
 }
+
+el("sensitivity").onchange = () => {
+  // ถ้าเพิ่งวิเคราะห์ไฟล์ไหนไป ให้ลองระดับใหม่กับไฟล์เดิมเลย
+  const current = document.querySelector(".meta strong");
+  if (current) startJob(current.textContent);
+};
 
 el("browse").onclick = () => el("file-input").click();
 el("file-input").onchange = (e) => e.target.files[0] && uploadFile(e.target.files[0]);

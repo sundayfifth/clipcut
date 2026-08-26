@@ -11,3 +11,10 @@ media/
 # env / os
 .env
 .DS_Store
+
+# โฟลเดอร์วีดีโออื่นๆ ที่วางไว้ในโปรเจกต์
+video/
+*.mp4
+*.mov
+*.mkv
+*.webm

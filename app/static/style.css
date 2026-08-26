@@ -111,3 +111,17 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .shot-no { font-weight: 600; }
 .shot-time, .shot-dur { color: var(--muted); font-variant-numeric: tabular-nums; }
 .shot-dur { margin-left: auto; }
+
+.sensitivity { margin-top: 1rem; }
+.sensitivity label { display: block; font-size: .9rem; font-weight: 600; margin-bottom: .35rem; }
+.sensitivity select {
+  font: inherit;
+  width: 100%;
+  padding: .5rem .6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.sensitivity-hint { margin: .4rem 0 0; }
+.level { color: var(--accent); }

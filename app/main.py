@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.analyze import DEFAULT_SENSITIVITY, SENSITIVITY
 from app.jobs import JobStore
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -61,14 +62,35 @@ def _resolve_source(name: str) -> Path:
     return candidate
 
 
+def _check_sensitivity(value: str) -> str:
+    if value not in SENSITIVITY:
+        raise HTTPException(
+            400, f"ระดับความละเอียด '{value}' ไม่ถูกต้อง (เลือกได้: {', '.join(SENSITIVITY)})"
+        )
+    return value
+
+
+@app.get("/api/sensitivity")
+def sensitivity_options() -> dict:
+    """ระดับความละเอียดที่เลือกได้ พร้อมค่า threshold จริงเพื่อความโปร่งใส"""
+    return {
+        "default": DEFAULT_SENSITIVITY,
+        "levels": [
+            {"key": k, "threshold": th, "min_seconds": mn}
+            for k, (th, mn) in SENSITIVITY.items()
+        ],
+    }
+
+
 @app.post("/api/jobs")
-def create_job(name: str) -> dict:
+def create_job(name: str, sensitivity: str = DEFAULT_SENSITIVITY) -> dict:
     """เริ่มวิเคราะห์ไฟล์ที่อยู่ใน media/input/"""
-    return jobs.submit(_resolve_source(name)).as_dict()
+    level = _check_sensitivity(sensitivity)
+    return jobs.submit(_resolve_source(name), level).as_dict()
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile) -> dict:
+async def upload(file: UploadFile, sensitivity: str = DEFAULT_SENSITIVITY) -> dict:
     """อัปโหลดไฟล์เข้า media/input/ แล้วเริ่มวิเคราะห์เลย"""
     filename = Path(file.filename or "").name
     if not filename:
@@ -84,7 +106,7 @@ async def upload(file: UploadFile) -> dict:
         while chunk := await file.read(1024 * 1024):
             out.write(chunk)
 
-    return jobs.submit(dest).as_dict()
+    return jobs.submit(dest, _check_sensitivity(sensitivity)).as_dict()
 
 
 @app.get("/api/jobs")

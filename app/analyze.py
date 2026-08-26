@@ -17,8 +17,15 @@ from scenedetect import ContentDetector, detect
 # ความละเอียดที่ใช้วิเคราะห์ — AutoFlip ใช้ 480px กว้าง งานตรวจ shot ไม่ต้องใช้ภาพเต็ม
 ANALYSIS_WIDTH = 480
 
-# shot ที่สั้นกว่านี้มักเป็น false positive จากแสงเปลี่ยน/แฟลช ไม่ใช่การตัดจริง
-MIN_SHOT_SECONDS = 0.4
+# ระดับความละเอียดของการแบ่งซีน: threshold ยิ่งต่ำยิ่งไวต่อการเปลี่ยนฉาก แบ่งถี่ขึ้น
+# min_seconds กันไม่ให้ได้ซีนสั้นจู๋จากแสงกระพริบ/แฟลช ซึ่งไม่ใช่การตัดจริง
+SENSITIVITY = {
+    "coarse": (32.0, 1.0),
+    "normal": (22.0, 0.6),
+    "fine": (12.0, 0.4),
+    "finest": (6.0, 0.3),
+}
+DEFAULT_SENSITIVITY = "fine"
 
 
 class AnalyzeError(Exception):
@@ -89,27 +96,41 @@ def probe(video: Path) -> VideoInfo:
     )
 
 
-def detect_shots(video: Path) -> list[Shot]:
-    """แบ่งคลิปเป็น shot
+def detect_shots(video: Path, sensitivity: str = DEFAULT_SENSITIVITY) -> list[Shot]:
+    """แบ่งคลิปเป็น shot ตามการเปลี่ยนฉาก
 
+    sensitivity เลือกได้จาก SENSITIVITY — ยิ่งละเอียดยิ่งแบ่งถี่
     คลิปที่ไม่มีรอยตัดเลยจะได้ 1 shot ครอบทั้งคลิป ไม่ใช่ list ว่าง
     """
+    if sensitivity not in SENSITIVITY:
+        raise AnalyzeError(
+            f"ระดับความละเอียด '{sensitivity}' ไม่ถูกต้อง "
+            f"(เลือกได้: {', '.join(SENSITIVITY)})"
+        )
+    threshold, min_seconds = SENSITIVITY[sensitivity]
+
+    info = probe(video)
+    # แปลงเป็นจำนวนเฟรมให้ detector กรองตั้งแต่ต้นทาง ไม่ต้องมารวมทีหลัง
+    min_frames = max(2, round(min_seconds * info.fps)) if info.fps else 2
+
     try:
-        scenes = detect(str(video), ContentDetector())
+        scenes = detect(
+            str(video),
+            ContentDetector(threshold=threshold, min_scene_len=min_frames),
+        )
     except Exception as err:  # scenedetect โยน exception ได้หลายชนิด
         raise AnalyzeError(
             f"วิเคราะห์ '{video.name}' ไม่สำเร็จ — ไฟล์อาจเสียหรือเป็น codec ที่ไม่รองรับ"
         ) from err
 
     if not scenes:
-        info = probe(video)
         return [Shot(index=0, start=0.0, end=info.duration)]
 
     shots: list[Shot] = []
     for start, end in scenes:
         span = (round(start.seconds, 3), round(end.seconds, 3))
-        # รวม shot ที่สั้นเกินเข้ากับ shot ก่อนหน้า แทนที่จะทิ้ง
-        if shots and span[1] - span[0] < MIN_SHOT_SECONDS:
+        # detector กรอง min_scene_len ให้แล้ว เหลือกันเศษท้ายคลิปที่สั้นผิดปกติ
+        if shots and span[1] - span[0] < min_seconds / 2:
             shots[-1].end = span[1]
             continue
         shots.append(Shot(index=len(shots), start=span[0], end=span[1]))

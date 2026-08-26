@@ -1,4 +1,5 @@
 import shutil
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -71,13 +72,75 @@ def test_job_runs_end_to_end_and_produces_thumbnails(sample):
     shutil.copy(sample, dest)
     try:
         job = client.post("/api/jobs", params={"name": dest.name}).json()
-        for _ in range(200):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
             job = client.get(f"/api/jobs/{job['id']}").json()
             if job["status"] in ("done", "error"):
                 break
+            time.sleep(0.1)
         assert job["status"] == "done", job.get("error")
         assert len(job["shots"]) == 3
         assert all(s["thumbnail"] for s in job["shots"])
         assert client.get(job["shots"][0]["thumbnail"]).status_code == 200
     finally:
         dest.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def subtle(tmp_path_factory):
+    """คลิปที่ฉากเปลี่ยนแบบเนียน — สีใกล้กันจนระดับหยาบจับไม่ได้"""
+    import subprocess
+
+    path = tmp_path_factory.mktemp("media") / "subtle.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=0x203050:size=640x360:rate=25:duration=2",
+            "-f", "lavfi", "-i", "color=c=0x243a5e:size=640x360:rate=25:duration=2",
+            "-f", "lavfi", "-i", "color=c=0x2a4570:size=640x360:rate=25:duration=2",
+            "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]",
+            "-map", "[v]", "-pix_fmt", "yuv420p", "-c:v", "libx264", str(path),
+        ],
+        check=True, capture_output=True,
+    )
+    return path
+
+
+def test_every_level_finds_hard_cuts(sample):
+    """รอยตัดชัดๆ ต้องเจอครบทุกระดับ"""
+    from app.analyze import SENSITIVITY
+
+    for level in SENSITIVITY:
+        assert len(detect_shots(sample, level)) == 3, level
+
+
+def test_finer_levels_catch_subtle_scene_changes(subtle):
+    """ฉากที่เปลี่ยนแบบเนียน ระดับหยาบจับไม่ได้ แต่ระดับละเอียดมากต้องจับได้"""
+    assert len(detect_shots(subtle, "coarse")) == 1
+    assert len(detect_shots(subtle, "finest")) == 3
+
+
+def test_camera_motion_does_not_create_false_cuts(tmp_path):
+    """กล้องขยับตลอดทั้งคลิปต้องไม่ถูกแบ่งเป็นหลายซีน แม้ที่ระดับละเอียดที่สุด"""
+    import subprocess
+
+    path = tmp_path / "motion.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25:duration=6",
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", str(path),
+        ],
+        check=True, capture_output=True,
+    )
+    assert len(detect_shots(path, "finest")) == 1
+
+
+def test_bad_sensitivity_is_rejected(sample):
+    from app.analyze import AnalyzeError
+
+    with pytest.raises(AnalyzeError):
+        detect_shots(sample, "ระดับที่ไม่มีอยู่")
+    # พารามิเตอร์ผิดต้องได้ 400 แม้ไฟล์จะไม่มีอยู่จริง
+    res = client.post("/api/jobs", params={"name": "x.mp4", "sensitivity": "nope"})
+    assert res.status_code == 400

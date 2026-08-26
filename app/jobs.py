@@ -12,13 +12,22 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.analyze import AnalyzeError, Shot, detect_shots, extract_thumbnail, probe, shot_to_dict
+from app.analyze import (
+    DEFAULT_SENSITIVITY,
+    AnalyzeError,
+    Shot,
+    detect_shots,
+    extract_thumbnail,
+    probe,
+    shot_to_dict,
+)
 
 
 @dataclass
 class Job:
     id: str
     source: Path
+    sensitivity: str = DEFAULT_SENSITIVITY
     status: str = "pending"  # pending | running | done | error
     step: str = "รอเริ่ม"
     progress: float = 0.0
@@ -30,6 +39,7 @@ class Job:
         return {
             "id": self.id,
             "name": self.source.name,
+            "sensitivity": self.sensitivity,
             "status": self.status,
             "step": self.step,
             "progress": round(self.progress, 3),
@@ -53,8 +63,8 @@ class JobStore:
         with self._lock:
             return list(self._jobs.values())
 
-    def submit(self, source: Path) -> Job:
-        job = Job(id=uuid.uuid4().hex[:12], source=source)
+    def submit(self, source: Path, sensitivity: str = DEFAULT_SENSITIVITY) -> Job:
+        job = Job(id=uuid.uuid4().hex[:12], source=source, sensitivity=sensitivity)
         with self._lock:
             self._jobs[job.id] = job
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
@@ -76,7 +86,7 @@ class JobStore:
             job.progress = 0.05
 
             job.step = "หารอยตัดระหว่างซีน"
-            shots = detect_shots(job.source)
+            shots = detect_shots(job.source, job.sensitivity)
             job.shots = shots
             job.progress = 0.35
 
