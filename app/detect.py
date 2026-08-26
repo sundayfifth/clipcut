@@ -161,3 +161,31 @@ def _detect_frame(detector: vision.ObjectDetector, frame) -> list[Box]:
         )
     ]
     return sorted((b for b in boxes if b.area > 0), key=lambda b: b.area, reverse=True)
+
+
+def detections_to_dict(dets: list[ShotDetections]) -> list[dict]:
+    """เก็บลงดิสก์เพื่อให้เปิดงานกลับมาทำต่อได้โดยไม่ต้องตรวจจับใหม่ (ช้าเป็นนาที)"""
+    return [
+        {
+            "shot_index": d.shot_index,
+            "frames_sampled": d.frames_sampled,
+            "frames_with_person": d.frames_with_person,
+            "per_frame": [
+                [round(t, 3), [[b.x0, b.y0, b.x1, b.y1] for b in boxes]]
+                for t, boxes in d.per_frame
+            ],
+        }
+        for d in dets
+    ]
+
+
+def detections_from_dict(data: list[dict]) -> list[ShotDetections]:
+    return [
+        ShotDetections(
+            shot_index=d["shot_index"],
+            frames_sampled=d["frames_sampled"],
+            frames_with_person=d["frames_with_person"],
+            per_frame=[(t, [Box(*b) for b in boxes]) for t, boxes in d["per_frame"]],
+        )
+        for d in data
+    ]

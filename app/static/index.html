@@ -18,8 +18,13 @@
   <div class="shell">
     <!-- ───────────────────────── ด้านซ้าย: ตั้งค่า ───────────────────────── -->
     <aside class="rail">
+      <section class="group group-clips">
+        <h2 class="group-title">คลิปในแอป</h2>
+        <div id="sources" class="sources" role="list"></div>
+      </section>
+
       <section class="group">
-        <h2 class="group-title">คลิปต้นฉบับ</h2>
+        <h2 class="group-title">เพิ่มคลิปใหม่</h2>
 
         <div id="dropzone" class="dropzone">
           <input type="file" id="file-input" accept="video/*" hidden />
@@ -43,15 +48,13 @@
           </select>
           <p class="hint">แบ่งถี่เกินให้เลื่อนลงหยาบ ซีนที่ควรแยกแต่ไม่แยกให้เลื่อนขึ้น</p>
         </div>
-
-        <div id="sources" class="sources" role="list"></div>
       </section>
 
       <!-- แถบซับ: โผล่เมื่อวิเคราะห์เสร็จแล้วเท่านั้น -->
       <section class="group" id="band-group" hidden>
         <h2 class="group-title">ตัดซับ / โลโก้เดิม</h2>
         <p class="hint hint-lead">
-          ซับที่ติดมากับต้นฉบับจะโดน crop ขาดกลางประโยค ตัดแถบทิ้งแล้วใส่ซับใหม่ทีหลังจะเนียนกว่า
+          ซับที่ติดมากับต้นฉบับจะโดนตัดขาดกลางประโยค ตัดแถบทิ้งแล้วใส่ซับใหม่ทีหลังจะเนียนกว่า
         </p>
 
         <figure class="preview">
@@ -94,8 +97,8 @@
           ลากไฟล์มาวาง หรือวางลิงก์ YouTube ก็ได้
         </p>
         <p class="empty-note">
-          เครื่องมือจะแบ่งซีนให้เอง หาว่าซีนไหน crop ตามตัวคนได้
-          ซีนไหนต้องย่อลงแล้วเติมพื้นหลัง แล้วให้คุณตรวจก่อนสร้างไฟล์
+          เครื่องมือจะแบ่งซีนให้เอง แล้วเลือกให้ว่าซีนไหนตัดเป็นเต็มจอตามตัวคนได้
+          ซีนไหนควรย่อทั้งภาพแล้วเติมพื้นหลัง จากนั้นคุณตรวจและแก้ได้ทุกซีนก่อนสร้างไฟล์
         </p>
       </div>
 
@@ -116,11 +119,18 @@
             <h2 class="results-title">ตรวจแต่ละซีน</h2>
             <p class="results-meta" id="results-meta"></p>
           </div>
-          <div class="seg seg-inline" role="group" aria-label="มุมมอง">
-            <button type="button" class="seg-btn" data-view="source">ภาพต้นฉบับ</button>
-            <button type="button" class="seg-btn is-on" data-view="result">ผลลัพธ์ 9:16</button>
+          <div class="head-tools">
+            <button type="button" class="btn btn-quiet btn-sm" id="undo-btn" disabled>
+              ย้อนกลับ
+            </button>
+            <div class="seg seg-inline" role="group" aria-label="มุมมอง">
+              <button type="button" class="seg-btn" data-view="source">ภาพต้นฉบับ</button>
+              <button type="button" class="seg-btn is-on" data-view="result">ผลลัพธ์ 9:16</button>
+            </div>
           </div>
         </div>
+
+        <div class="ribbon" id="ribbon" aria-label="ภาพรวมทั้งคลิปตามเวลา"></div>
 
         <div class="toolbar">
           <div class="filters" role="group" aria-label="กรองซีน">
@@ -136,8 +146,8 @@
         </div>
 
         <p class="kbd-hint">
-          คลิกที่ภาพเพื่อเลือก/ไม่เลือกซีน · กดที่การ์ดแล้วใช้ <kbd>Space</kbd> สลับเลือก
-          <kbd>C</kbd> เต็มจอ <kbd>P</kbd> ย่อทั้งภาพ
+          เลื่อนเมาส์ผ่านภาพเพื่อดูซีนเคลื่อนไหว · <strong>ลากบนภาพเพื่อขยับกรอบ</strong> หมุนล้อเพื่อซูม
+          · <kbd>Space</kbd> เลือก <kbd>C</kbd> เต็มจอ <kbd>P</kbd> ย่อทั้งภาพ <kbd>⌘Z</kbd> ย้อนกลับ
         </p>
 
         <div class="shots" id="shots"></div>
@@ -154,6 +164,7 @@
       <div class="tally" id="tally"></div>
       <div class="actionbar-right">
         <p class="render-step" id="render-step"></p>
+        <button type="button" id="cancel-btn" class="btn btn-quiet" hidden>ยกเลิก</button>
         <button type="button" id="render-btn" class="btn btn-primary">สร้างไฟล์ 9:16</button>
       </div>
     </div>

@@ -22,6 +22,10 @@ AUDIO_ARGS = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
 BLUR_SIGMA = 25
 
 
+class RenderCancelled(Exception):
+    """คนกดยกเลิกระหว่าง render"""
+
+
 def _path_expression(shot_plan: dict) -> str:
     """ตำแหน่ง x ของกรอบ — คงที่ หรือขยับตาม polynomial ที่ fit ไว้ทั้ง shot
 
@@ -144,7 +148,8 @@ def _join_stages(stages: list[str]) -> str:
     return out
 
 
-def render_plan(source: Path, plan: dict, work_dir: Path, dest: Path, on_progress=None) -> Path:
+def render_plan(source: Path, plan: dict, work_dir: Path, dest: Path,
+                on_progress=None, should_cancel=None) -> Path:
     segments_dir = work_dir / "segments"
     segments: list[Path] = []
     shots = [s for s in plan["shots"] if s.get("included", True)]
@@ -153,6 +158,9 @@ def render_plan(source: Path, plan: dict, work_dir: Path, dest: Path, on_progres
 
     bands = Bands.from_dict(plan.get("bands"))
     for i, shot_plan in enumerate(shots, start=1):
+        # เช็คก่อนเริ่มแต่ละซีน — ยกเลิกกลางคันจะได้ไม่ต้องรอจนจบทั้งคลิป
+        if should_cancel and should_cancel():
+            raise RenderCancelled()
         seg = segments_dir / f"seg-{shot_plan['shot_index']:04d}.mp4"
         render_shot(
             source, shot_plan, plan["target_size"], seg,
@@ -161,6 +169,9 @@ def render_plan(source: Path, plan: dict, work_dir: Path, dest: Path, on_progres
         segments.append(seg)
         if on_progress:
             on_progress(i / len(shots))
+
+    if should_cancel and should_cancel():
+        raise RenderCancelled()
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     concat(segments, dest)

@@ -10,6 +10,7 @@ detector จะเห็นเป็นคนแล้ว crop จนข้อ�
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import traceback
@@ -22,15 +23,21 @@ from app.analyze import (
     AnalyzeError,
     Shot,
     detect_shots,
-    extract_thumbnail,
+    extract_strip,
     probe,
+    shot_from_dict,
     shot_to_dict,
 )
 from app.bands import Bands
-from app.detect import ShotDetections, detect_people
+from app.detect import (
+    ShotDetections,
+    detect_people,
+    detections_from_dict,
+    detections_to_dict,
+)
 from app.ingest import download_youtube, is_youtube_url
 from app.plan import build_plan, clamp_adjust, derive_crop, summarise
-from app.render import render_plan
+from app.render import RenderCancelled, render_plan
 from app.report import build_checklist
 
 
@@ -51,6 +58,9 @@ class Job:
     source_url: str | None = None
     # เก็บผลตรวจจับไว้ เพื่อคำนวณแผนใหม่ตอนคนขยับแถบซับได้ทันทีโดยไม่ต้องตรวจซ้ำ
     detections: list[ShotDetections] = field(default_factory=list)
+    # ประวัติ plan สำหรับ undo — งานตรวจ 40 กว่าซีนพลาดทีนึงแล้วย้อนไม่ได้คือฝันร้าย
+    history: list[dict] = field(default_factory=list)
+    cancel: bool = False
 
     def as_dict(self) -> dict:
         by_index = {s["shot_index"]: s for s in (self.plan or {}).get("shots", [])}
@@ -65,6 +75,7 @@ class Job:
             "info": self.info,
             "output": self.output,
             "checklist": self.checklist,
+            "can_undo": bool(self.history),
             "bands": (self.plan or {}).get("bands"),
             "summary": (self.plan or {}).get("summary"),
             "shots": [
@@ -80,13 +91,78 @@ class JobStore:
         self.work_dir = work_dir
         self.output_dir = output_dir
 
+    MAX_HISTORY = 60
+
     def get(self, job_id: str) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def _snapshot(self, job: Job) -> None:
+        """เก็บ plan ก่อนแก้ เพื่อให้ undo ได้"""
+        if job.plan is None:
+            return
+        job.history.append(copy.deepcopy(job.plan))
+        del job.history[:-self.MAX_HISTORY]
+
+    def undo(self, job: Job) -> None:
+        if not job.history:
+            raise AnalyzeError("ไม่มีอะไรให้ย้อนกลับแล้ว")
+        job.plan = job.history.pop()
+        self.save(job)
+
     def list(self) -> list[Job]:
         with self._lock:
             return list(self._jobs.values())
+
+    # ── เก็บ/กู้งาน ────────────────────────────────────────────────
+
+    def save(self, job: Job) -> None:
+        """เขียนสถานะลงดิสก์ทุกครั้งที่คนแก้อะไร — ปิด server แล้วเปิดใหม่ต้องทำต่อได้"""
+        if job.plan is None:
+            return
+        dest = self.work_dir / job.id / "job.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "id": job.id,
+            "source": str(job.source),
+            "sensitivity": job.sensitivity,
+            "info": job.info,
+            "shots": [shot_to_dict(s) for s in job.shots],
+            "plan": job.plan,
+            "output": job.output,
+            "checklist": job.checklist,
+            "detections": detections_to_dict(job.detections),
+        }
+        tmp = dest.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(dest)  # เขียนทับแบบ atomic กันไฟล์พังถ้าดับกลางคัน
+
+    def restore(self) -> int:
+        """อ่านงานที่เคยทำค้างไว้กลับมาตอน server เริ่ม"""
+        found = 0
+        if not self.work_dir.is_dir():
+            return 0
+        for path in sorted(self.work_dir.glob("*/job.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                source = Path(data["source"])
+                if not source.is_file():
+                    continue  # ไฟล์ต้นฉบับหายไปแล้ว เปิดต่อไม่ได้
+                job = Job(
+                    id=data["id"], source=source, sensitivity=data["sensitivity"],
+                    status="done" if data.get("output") else "ready",
+                    step="เปิดงานที่ค้างไว้กลับมา", progress=1.0,
+                    info=data["info"], plan=data["plan"],
+                    output=data.get("output"), checklist=data.get("checklist"),
+                    shots=[shot_from_dict(x) for x in data["shots"]],
+                    detections=detections_from_dict(data.get("detections", [])),
+                )
+                with self._lock:
+                    self._jobs[job.id] = job
+                found += 1
+            except Exception:  # noqa: BLE001 — ไฟล์เสียหนึ่งอันไม่ควรทำให้ server ไม่ขึ้น
+                traceback.print_exc()
+        return found
 
     def submit(self, source: Path, sensitivity: str = DEFAULT_SENSITIVITY) -> Job:
         job = Job(id=uuid.uuid4().hex[:12], source=source, sensitivity=sensitivity)
@@ -112,6 +188,7 @@ class JobStore:
         """ขยับแถบซับแล้วคำนวณแผนใหม่ทันที — ไม่ต้องตรวจจับคนซ้ำ"""
         if job.status not in ("ready", "done") or not job.detections:
             raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะตั้งแถบได้")
+        self._snapshot(job)
 
         # การตัดสินใจของคนต้องรอดจากการคำนวณใหม่ ไม่งั้นขยับแถบทีเดียวงานที่ตรวจไว้หายหมด
         keep = {s["shot_index"]: s for s in job.plan["shots"]}
@@ -140,11 +217,13 @@ class JobStore:
                 shot_plan["crop"] = derive_crop(shot_plan["crop_base"], None, info)
 
         job.plan["summary"] = summarise(job.plan["shots"])
+        self.save(job)
 
     def set_crop_adjust(self, job: Job, shot_index: int, adjust: dict) -> None:
         """เลื่อน/ย่อกรอบเอง — เก็บเป็นส่วนต่างจากกรอบที่เครื่องคำนวณ"""
         if job.status not in ("ready", "done"):
             raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะปรับกรอบได้")
+        self._snapshot(job)
 
         for shot_plan in job.plan["shots"]:
             if shot_plan["shot_index"] != shot_index:
@@ -157,12 +236,14 @@ class JobStore:
             clean = clamp_adjust(adjust)
             shot_plan["adjust"] = clean
             shot_plan["crop"] = derive_crop(base, clean, _info_from(job))
+            self.save(job)
             return
         raise AnalyzeError(f"ไม่พบซีนที่ {shot_index + 1}")
 
     def set_included(self, job: Job, shot_index: int, included: bool) -> None:
         if job.status not in ("ready", "done"):
             raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะเลือกซีนได้")
+        self._snapshot(job)
         for shot_plan in job.plan["shots"]:
             if shot_plan["shot_index"] == shot_index:
                 shot_plan["included"] = included
@@ -170,6 +251,7 @@ class JobStore:
         else:
             raise AnalyzeError(f"ไม่พบซีนที่ {shot_index + 1}")
         job.plan["summary"] = summarise(job.plan["shots"])
+        self.save(job)
 
     def set_mode(self, job: Job, shot_index: int, mode: str) -> None:
         """ให้คนพลิกการตัดสินของเครื่องได้ — pad ที่ควรเป็น crop หรือกลับกัน"""
@@ -177,6 +259,7 @@ class JobStore:
             raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะแก้ได้")
         if mode not in ("crop", "pad"):
             raise AnalyzeError(f"โหมด '{mode}' ไม่ถูกต้อง (crop หรือ pad เท่านั้น)")
+        self._snapshot(job)
 
         for shot_plan in job.plan["shots"]:
             if shot_plan["shot_index"] == shot_index:
@@ -197,11 +280,19 @@ class JobStore:
             raise AnalyzeError(f"ไม่พบซีนที่ {shot_index + 1}")
 
         job.plan["summary"] = summarise(job.plan["shots"])
+        self.save(job)
 
     def start_render(self, job: Job) -> None:
         if job.status not in ("ready", "done"):
             raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะ render ได้")
+        job.cancel = False
         threading.Thread(target=self._render, args=(job,), daemon=True).start()
+
+    def cancel_render(self, job: Job) -> None:
+        if job.status != "rendering":
+            raise AnalyzeError("ตอนนี้ไม่ได้กำลัง render อยู่")
+        job.cancel = True
+        job.step = "กำลังยกเลิก"
 
     # ------------------------------------------------------------------ งานเบื้องหลัง
 
@@ -245,7 +336,7 @@ class JobStore:
             for i, shot in enumerate(shots, start=1):
                 dest = thumbs / f"shot-{shot.index:04d}.jpg"
                 try:
-                    extract_thumbnail(job.source, shot.midpoint, dest)
+                    shot.frames = extract_strip(job.source, shot, dest)
                     shot.thumbnail = f"/api/jobs/{job.id}/thumbs/{dest.name}"
                 except AnalyzeError:
                     shot.thumbnail = None  # ภาพเดียวพลาดไม่ควรล้มทั้งงาน
@@ -264,9 +355,10 @@ class JobStore:
             _write_plan(self.work_dir / job.id / "edit-plan.json", job.plan)
 
             s = job.plan["summary"]
-            job.step = f"พร้อม render — crop {s['crop']} ซีน · ย่อ+เติมพื้นหลัง {s['pad']} ซีน"
+            job.step = f"พร้อมสร้างไฟล์ — เต็มจอ {s['crop']} ซีน · ย่อทั้งภาพ {s['pad']} ซีน"
             job.status = "ready"
             job.progress = 1.0
+            self.save(job)
 
         except Exception as err:
             self._fail(job, err)
@@ -279,12 +371,14 @@ class JobStore:
 
             out_dir = self.output_dir / _safe_stem(job.source)
             dest = out_dir / f"{_safe_stem(job.source)}_9x16.mp4"
+            total = sum(1 for s in job.plan["shots"] if s.get("included", True))
             render_plan(
                 job.source, job.plan, self.work_dir / job.id, dest,
                 on_progress=lambda p: (
                     setattr(job, "progress", p),
-                    setattr(job, "step", f"กำลัง render ซีนที่ {int(p * len(job.plan['shots'])) or 1}/{len(job.plan['shots'])}"),
+                    setattr(job, "step", f"กำลังสร้างไฟล์ ซีนที่ {max(1, round(p * total))}/{total}"),
                 ),
+                should_cancel=lambda: job.cancel,
             )
             _write_plan(out_dir / "edit-plan.json", job.plan)
 
@@ -296,11 +390,18 @@ class JobStore:
             job.step = f"เสร็จแล้ว — {dest.name}"
             job.status = "done"
             job.progress = 1.0
+            self.save(job)
 
         except Exception as err:
             self._fail(job, err)
 
     def _fail(self, job: Job, err: Exception) -> None:
+        if isinstance(err, RenderCancelled):
+            job.status = "ready"
+            job.step = "ยกเลิกแล้ว"
+            job.progress = 1.0
+            job.cancel = False
+            return
         if isinstance(err, AnalyzeError):
             job.error = str(err)
         else:

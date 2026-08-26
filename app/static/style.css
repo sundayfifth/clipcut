@@ -523,7 +523,18 @@ input[type="range"]::-moz-range-thumb {
 .shot-no { font-weight: 650; color: var(--ink); font-size: 0.8125rem; }
 .shot-dur { margin-left: auto; }
 
-.reason { margin: 0; font-size: 0.75rem; line-height: 1.45; color: var(--ink-faint); }
+.reason {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--ink-faint);
+  /* จำกัด 2 บรรทัดให้การ์ดสูงเท่ากัน กริดจะได้ไม่ดูรก */
+  min-height: 2.18em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 .error-note {
   margin: 1rem 0 0;
@@ -755,3 +766,92 @@ kbd {
   cursor: pointer;
 }
 .tune-reset:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+
+/* ── โซนรายการคลิป ─────────────────────────────────── */
+
+.group-clips .sources { gap: 0.2rem; }
+.group-clips .source { padding: 0.55rem 0.65rem; font-size: 0.8438rem; }
+
+/* ── หัวข้อ + เครื่องมือ ────────────────────────────── */
+
+.head-tools { display: flex; align-items: center; gap: 0.5rem; }
+
+/* ── แถบภาพรวมตามเวลา ──────────────────────────────── */
+
+.ribbon {
+  display: flex;
+  gap: 2px;
+  height: 34px;
+  padding: 3px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.rib {
+  flex: 1 1 0;
+  min-width: 5px;
+  border: 0;
+  border-radius: 3px;
+  padding: 0;
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: filter var(--fast) var(--ease), opacity var(--fast) var(--ease);
+}
+.rib:hover { filter: brightness(1.35); }
+.rib[data-mode="crop"] { background: var(--crop-soft); box-shadow: inset 0 -2px 0 var(--crop); }
+.rib[data-mode="pad"] { background: var(--pad-soft); box-shadow: inset 0 -2px 0 var(--pad); }
+.rib[data-on="false"] { opacity: 0.3; }
+
+.rib-no {
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+/* ชิ้นแคบเกินก็ไม่ต้องโชว์เลข ให้เห็นเป็นแถบสีพอ */
+.rib { container-type: inline-size; }
+@container (max-width: 22px) { .rib-no { display: none; } }
+
+/* ── scrub ดูเฟรมในซีน ─────────────────────────────── */
+
+.scrub { position: relative; display: block; touch-action: none; }
+.scrub.is-dragging { cursor: grabbing; }
+.shot[data-mode="crop"] .scrub { cursor: grab; }
+
+.tilebox { display: block; aspect-ratio: 16 / 9; }
+
+.frame916-pad .bgwrap {
+  position: absolute;
+  inset: 0;
+  filter: blur(16px) brightness(0.55);
+  transform: scale(1.1);
+}
+.frame916-pad .fg { position: absolute; left: 0; width: 100%; display: block; }
+
+.scrub-bar {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 2px;
+  background: oklch(1 0 0 / 0.14);
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+.scrub:hover .scrub-bar { opacity: 1; }
+.scrub-bar i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  transform-origin: left center;
+  background: var(--accent);
+}
+
+.shot.is-flash { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .shot.is-flash { outline-width: 3px; }
+}

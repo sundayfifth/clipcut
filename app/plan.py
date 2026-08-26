@@ -178,13 +178,13 @@ def plan_shot(
     if not dets.per_frame:
         return ShotPlan(
             mode="pad",
-            reason="ไม่เจอคนในซีนนี้ — น่าจะเป็นภาพหน้าจอหรือกราฟฟิก ย่อลงให้เห็นครบดีกว่า",
+            reason="ไม่เจอคนในซีนนี้ น่าจะเป็นภาพหน้าจอหรือกราฟฟิก ย่อไว้จะได้เห็นครบ",
             crop=None, **common,
         )
     if dets.hit_rate < MIN_HIT_RATE:
         return ShotPlan(
             mode="pad",
-            reason=f"เจอคนแค่ {dets.hit_rate:.0%} ของเฟรม ไม่มั่นใจพอจะ crop",
+            reason="เห็นคนไม่ชัดตลอดซีน ย่อไว้ก่อนปลอดภัยกว่า",
             crop=None, **common,
         )
 
@@ -192,7 +192,7 @@ def plan_shot(
     if conflict_rate >= CO_SUBJECT_FRAME_RATIO:
         return ShotPlan(
             mode="pad",
-            reason=f"มีคนสำคัญหลายคนอยู่คนละฝั่งใน {conflict_rate:.0%} ของเฟรม กรอบเดียวครอบไม่ไหว",
+            reason="มีคนสำคัญหลายคนอยู่คนละฝั่ง ถ้าเต็มจอจะเห็นไม่ครบ",
             crop=None, **common,
         )
 
@@ -205,7 +205,7 @@ def plan_shot(
     if drift > crop_w * MAX_CENTER_DRIFT:
         return ShotPlan(
             mode="pad",
-            reason=f"คนขยับซ้ายขวา {drift:.0f}px กว้างเกินกว่ากรอบนิ่งจะตามไหว",
+            reason="คนเดินไปมากว้างเกินไป ถ้าเต็มจอจะหลุดเฟรม",
             crop=None, **common,
         )
 
@@ -216,7 +216,7 @@ def plan_shot(
     if drift <= STATIC_THRESHOLD_PX:
         return ShotPlan(
             mode="crop",
-            reason=f"คนอยู่นิ่ง ({drift:.0f}px) ใช้กรอบคงที่",
+            reason="คนอยู่นิ่ง กรอบล็อกอยู่กับที่",
             crop=crop, path={"kind": "static"}, **common,
         )
 
@@ -224,13 +224,13 @@ def plan_shot(
     if path is None:
         return ShotPlan(
             mode="crop",
-            reason=f"ตาม subject หลักได้ (ขยับ {drift:.0f}px ในกรอบ {crop_w:.0f}px)",
+            reason="คนอยู่ในกรอบตลอดซีน",
             crop=crop, path={"kind": "static"}, **common,
         )
 
     return ShotPlan(
         mode="crop",
-        reason=f"กรอบขยับตามคน ({drift:.0f}px) แบบลื่นทั้งซีน",
+        reason="กรอบขยับตามคนตลอดซีน",
         crop=crop, path=path, **common,
     )
 

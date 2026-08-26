@@ -28,8 +28,11 @@ for _sub in ("input", "work", "output"):
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
-app = FastAPI(title="clipcut", version="0.5.0")
+app = FastAPI(title="clipcut", version="0.6.0")
 jobs = JobStore(WORK_DIR, OUTPUT_DIR)
+_restored = jobs.restore()
+if _restored:
+    print(f"เปิดงานที่ค้างไว้กลับมา {_restored} งาน")
 
 
 @app.get("/health")
@@ -220,6 +223,37 @@ def download_checklist(job_id: str) -> FileResponse:
     if not job.checklist or not Path(job.checklist).is_file():
         raise HTTPException(404, "ยังไม่มี checklist — ต้อง render ก่อน")
     return FileResponse(job.checklist, filename=Path(job.checklist).name)
+
+
+@app.post("/api/jobs/{job_id}/undo")
+def undo(job_id: str) -> dict:
+    """ย้อนการแก้ครั้งล่าสุด"""
+    job = _require_job(job_id)
+    try:
+        jobs.undo(job)
+    except AnalyzeError as err:
+        raise HTTPException(400, str(err)) from err
+    return job.as_dict()
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_render(job_id: str) -> dict:
+    job = _require_job(job_id)
+    try:
+        jobs.cancel_render(job)
+    except AnalyzeError as err:
+        raise HTTPException(400, str(err)) from err
+    return job.as_dict()
+
+
+@app.post("/api/jobs/{job_id}/reveal")
+def reveal_output(job_id: str) -> dict:
+    """เปิดโฟลเดอร์ผลลัพธ์ใน Finder — สิ่งที่คนอยากทำจริงหลัง render เสร็จ"""
+    job = _require_job(job_id)
+    if not job.output or not Path(job.output).is_file():
+        raise HTTPException(404, "ยังไม่มีไฟล์ผลลัพธ์")
+    subprocess.run(["open", "-R", job.output], check=False, timeout=15)
+    return {"ok": True}
 
 
 @app.post("/api/jobs/{job_id}/render")

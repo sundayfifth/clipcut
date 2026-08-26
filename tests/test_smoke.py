@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.analyze import detect_shots, probe
-from app.main import INPUT_DIR, app
+from app.main import INPUT_DIR, MEDIA_DIR, WORK_DIR, app
 
 client = TestClient(app)
 
@@ -355,5 +355,66 @@ def test_crop_can_be_nudged_and_survives_a_band_change(sample):
             assert client.post(
                 f"/api/jobs/{jid}/shots/{pad}/crop", params={"dx": 0.2}
             ).status_code == 400
+    finally:
+        dest.unlink(missing_ok=True)
+
+
+# ── เก็บงานลงดิสก์ / undo ────────────────────────────────────
+
+def test_every_edit_survives_a_restart(sample, tmp_path):
+    """แก้ครบทุกอย่าง แล้วโหลด store ใหม่ ต้องได้สถานะเดิมกลับมาทั้งหมด
+
+    เขียนไว้เพราะเคยลืมใส่ save() ใน 2 เมธอด แล้วงานที่ตรวจไว้หายตอนรีสตาร์ท
+    """
+    from app.jobs import JobStore
+
+    dest = INPUT_DIR / "pytest-persist.mp4"
+    shutil.copy(sample, dest)
+    try:
+        job = client.post("/api/jobs", params={"name": dest.name}).json()
+        jid = job["id"]
+        job = _wait(jid, "ready")
+        assert job["status"] == "ready", job.get("error")
+
+        client.post(f"/api/jobs/{jid}/shots/0/mode", params={"mode": "crop"})
+        client.post(f"/api/jobs/{jid}/shots/0/crop", params={"dx": -0.3, "scale": 0.75})
+        client.post(f"/api/jobs/{jid}/shots/1/included", params={"included": False})
+        before = client.post(f"/api/jobs/{jid}/bands", params={"bottom": 0.12}).json()
+
+        # จำลองการปิดแล้วเปิด server ใหม่
+        fresh = JobStore(WORK_DIR, MEDIA_DIR / "output")
+        assert fresh.restore() >= 1
+        after = fresh.get(jid)
+        assert after is not None, "กู้งานกลับมาไม่ได้"
+
+        assert after.plan["bands"] == before["bands"]
+        assert after.plan["summary"] == before["summary"]
+        for i in (0, 1):
+            assert after.plan["shots"][i] == before["shots"][i]["plan"], f"ซีน {i} ไม่ตรง"
+        assert after.detections, "ผลตรวจจับคนต้องถูกเก็บด้วย ไม่งั้นขยับแถบแล้วคำนวณใหม่ไม่ได้"
+    finally:
+        dest.unlink(missing_ok=True)
+
+
+def test_undo_walks_back_one_edit_at_a_time(sample):
+    dest = INPUT_DIR / "pytest-undo.mp4"
+    shutil.copy(sample, dest)
+    try:
+        job = client.post("/api/jobs", params={"name": dest.name}).json()
+        jid = job["id"]
+        job = _wait(jid, "ready")
+        assert not job["can_undo"]
+
+        client.post(f"/api/jobs/{jid}/shots/0/included", params={"included": False})
+        job = client.post(f"/api/jobs/{jid}/shots/1/included", params={"included": False}).json()
+        assert job["summary"]["included"] == 1
+        assert job["can_undo"]
+
+        job = client.post(f"/api/jobs/{jid}/undo").json()
+        assert job["summary"]["included"] == 2
+        job = client.post(f"/api/jobs/{jid}/undo").json()
+        assert job["summary"]["included"] == 3
+        assert not job["can_undo"]
+        assert client.post(f"/api/jobs/{jid}/undo").status_code == 400
     finally:
         dest.unlink(missing_ok=True)

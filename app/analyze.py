@@ -32,12 +32,19 @@ class AnalyzeError(Exception):
     """ข้อความที่ปลอดภัยพอจะโชว์ให้ผู้ใช้อ่านได้ตรงๆ"""
 
 
+# จำนวนเฟรมในแถบ sprite ต่อ 1 ซีน — ตัดสินการจัดเฟรมจากเฟรมเดียวคือการเดา
+# ซีนสั้นไม่ต้องเยอะ ซีนยาวเอาเยอะหน่อยจะได้ scrub เห็นการเคลื่อนไหว
+def frame_count(duration: float) -> int:
+    return max(3, min(12, int(duration / 1.2) + 3))
+
+
 @dataclass
 class Shot:
     index: int
     start: float
     end: float
     thumbnail: str | None = None
+    frames: int = 1
 
     @property
     def duration(self) -> float:
@@ -137,24 +144,43 @@ def detect_shots(video: Path, sensitivity: str = DEFAULT_SENSITIVITY) -> list[Sh
     return shots
 
 
-def extract_thumbnail(video: Path, at_second: float, dest: Path) -> None:
-    """ดึง 1 เฟรมที่วินาทีที่ระบุ ย่อเหลือ ANALYSIS_WIDTH"""
+def extract_strip(video: Path, shot: Shot, dest: Path) -> int:
+    """ดึงหลายเฟรมจากซีนมาต่อเป็นแถบเดียว (sprite) ด้วย ffmpeg รอบเดียว
+
+    ทำเป็นแถบเดียวเพราะเรียก ffmpeg ทีละเฟรมกับ 40 กว่าซีนช้าเกินไป
+    และหน้าเว็บ scrub ได้ลื่นกว่าเพราะไม่ต้องโหลดทีละภาพ
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
+    n = frame_count(shot.duration)
+    # เว้นขอบหัวท้ายซีนเล็กน้อย กันเฟรมที่คาบเกี่ยวรอยตัด
+    margin = min(0.12, shot.duration * 0.08)
+    span = max(0.04, shot.duration - margin * 2)
+    step = span / n
+
     result = subprocess.run(
         [
             "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
-            "-ss", f"{at_second:.3f}", "-i", str(video),
-            "-frames:v", "1",
-            "-vf", f"scale={ANALYSIS_WIDTH}:-2",
+            "-ss", f"{shot.start + margin:.3f}", "-t", f"{span:.3f}",
+            "-i", str(video),
+            "-vf", f"fps={1 / step:.6f},scale={ANALYSIS_WIDTH}:-2,tile={n}x1",
+            "-frames:v", "1", "-q:v", "4",
             str(dest),
         ],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=300,
     )
     if result.returncode != 0 or not dest.exists():
         raise AnalyzeError(
-            f"ดึงภาพตัวอย่างที่วินาที {at_second:.1f} ไม่สำเร็จ: {result.stderr.strip()[:200]}"
+            f"ดึงภาพตัวอย่างซีน {shot.index + 1} ไม่สำเร็จ: {result.stderr.strip()[:200]}"
         )
+    return n
 
 
 def shot_to_dict(shot: Shot) -> dict:
     return {**asdict(shot), "duration": round(shot.duration, 3)}
+
+
+def shot_from_dict(data: dict) -> Shot:
+    return Shot(
+        index=data["index"], start=data["start"], end=data["end"],
+        thumbnail=data.get("thumbnail"), frames=data.get("frames", 1),
+    )

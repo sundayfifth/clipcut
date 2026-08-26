@@ -44,6 +44,9 @@ const ui = {
   renderProgress: el("render-progress"),
   done: el("done"),
   filterEmpty: el("filter-empty"),
+  ribbon: el("ribbon"),
+  undoBtn: el("undo-btn"),
+  cancelBtn: el("cancel-btn"),
 };
 
 let jobId = null;
@@ -256,10 +259,49 @@ function draw(job) {
     `${job.name} · ${i.aspect} · ${tc(i.duration)} · ${i.fps} fps`;
 
   lastJob = job;
+  ui.undoBtn.disabled = !job.can_undo;
+  ui.cancelBtn.hidden = job.status !== "rendering";
   drawTally(job.summary);
   drawShots(job);
+  drawRibbon(job);
   applyFilter();
 }
+
+/* แถบภาพรวมตามเวลา — กริดการ์ดทำให้ไม่เห็นจังหวะของคลิป
+   ความกว้างแต่ละชิ้นแปรตามความยาวซีน คลิกแล้วกระโดดไปที่การ์ดนั้น */
+function drawRibbon(job) {
+  const total = job.shots.reduce((sum, s) => sum + s.duration, 0) || 1;
+  const key = job.shots.map((s) => {
+    const p = s.plan || {};
+    return `${s.index}:${p.mode}:${p.included}`;
+  }).join(",");
+  if (ui.ribbon.dataset.key === key) return;
+  ui.ribbon.dataset.key = key;
+
+  ui.ribbon.innerHTML = job.shots.map((s) => {
+    const p = s.plan || {};
+    const on = p.included !== false;
+    return `<button type="button" class="rib" data-jump="${s.index}"
+      style="flex-grow:${Math.max(0.4, s.duration / total * 100)}"
+      data-mode="${p.mode || ""}" data-on="${on}"
+      title="ซีน ${s.index + 1} · ${s.duration.toFixed(1)} วิ · ${MODE_LABEL[p.mode] || ""}${on ? "" : " (ไม่ได้เลือก)"}"
+    ><span class="rib-no">${s.index + 1}</span></button>`;
+  }).join("");
+}
+
+ui.ribbon.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-jump]");
+  if (!btn) return;
+  const card = ui.shots.querySelector(`[data-shot="${btn.dataset.jump}"]`);
+  if (!card) return;
+  if (card.hidden) {
+    document.querySelector('[data-filter="all"]').click();
+  }
+  card.scrollIntoView({ block: "center", behavior: "smooth" });
+  card.focus({ preventScroll: true });
+  card.classList.add("is-flash");
+  setTimeout(() => card.classList.remove("is-flash"), 900);
+});
 
 function drawTally(summary) {
   if (!summary) return;
@@ -325,46 +367,112 @@ function drawShots(job) {
   }
 }
 
-/* ภาพในการ์ด — สลับได้ระหว่างต้นฉบับ (เห็นว่าจะเสียอะไร) กับผลลัพธ์จริง 9:16 */
+/* ภาพในการ์ดเป็นแถบ sprite หลายเฟรม — เลื่อนเมาส์ผ่านเพื่อดูว่าซีนเคลื่อนไหวยังไง
+   ตัดสินการจัดเฟรมจากเฟรมเดียวคือการเดา เพราะทั้งคนและกรอบขยับตลอดซีน
+
+   ใช้ background-image ไม่ใช่ <img> ที่ยืดด้วย width% เพราะการยืด img ทำให้เบราว์เซอร์
+   สร้าง layer เท่าขนาดที่ยืด (เคยพุ่งไป 6400px ต่อการ์ด) จนค้างทั้งหน้า
+   background วาดแค่เท่าขนาดกล่องจริง */
+
+function tileStyle(url, n, at, sizeW, sizeH, posX, posY) {
+  return [
+    // ต้องเป็น single quote — style="..." จะขาดถ้าใช้ double quote ข้างใน
+    `background-image:url('${url}')`,
+    `background-size:${sizeW}% ${sizeH}%`,
+    `background-position:${posX}% ${posY}%`,
+    "background-repeat:no-repeat",
+  ].join(";");
+}
+
+/* background-position เป็น % คิดจาก (ขนาดภาพ - ขนาดกล่อง) จึงต้องแปลงจาก px เอง */
+function posPct(offset, imageSize, boxSize) {
+  const room = imageSize - boxSize;
+  return room <= 0 ? 0 : (offset / room) * 100;
+}
+
 function mediaFor(shot, plan, src, bands) {
   if (!shot.thumbnail) return `<div class="thumb-missing">ไม่มีภาพ</div>`;
-  if (view === "source" || !plan || !src) {
-    return `<img src="${shot.thumbnail}" alt="ซีน ${shot.index + 1}" loading="lazy" />` +
-      frameOverlay(plan, src, bands);
-  }
-  return plan.mode === "crop" ? cropPreview(shot, plan, src) : padPreview(shot, src, bands);
+  const n = shot.frames || 1;
+  const inner =
+    view === "source" || !plan || !src
+      ? sourceView(shot, n, plan, src, bands)
+      : plan.mode === "crop"
+        ? cropPreview(shot, plan, src, n)
+        : padPreview(shot, src, bands, n);
+  return `<div class="scrub" data-frames="${n}" data-at="0">${inner}
+    <span class="scrub-bar" aria-hidden="true"><i style="transform:scaleX(${1 / n})"></i></span></div>`;
+}
+
+function sourceView(shot, n, plan, src, bands) {
+  return `<span class="tilebox" data-role="frame" data-n="${n}"
+      style="${tileStyle(shot.thumbnail, n, 0, n * 100, 100, 0, 0)}"
+      role="img" aria-label="ซีน ${shot.index + 1}"></span>` +
+    frameOverlay(plan, src, bands);
 }
 
 /* crop: ขยายภาพให้กรอบที่เลือกไว้เต็มกล่อง 9:16 พอดี */
-function cropPreview(shot, plan, src) {
+function cropPreview(shot, plan, src, n) {
   const c = plan.crop;
-  const style = [
-    `width:${(src.width / c.w) * 100}%`,
-    `height:${(src.height / c.h) * 100}%`,
-    `left:${(-c.x / c.w) * 100}%`,
-    `top:${(-c.y / c.h) * 100}%`,
-  ].join(";");
-  return `<div class="frame916 frame916-crop">
-    <img src="${shot.thumbnail}" alt="ผลลัพธ์ซีน ${shot.index + 1}" loading="lazy" style="${style}" />
-  </div>`;
+  const sizeW = (n * src.width / c.w) * 100;
+  const sizeH = (src.height / c.h) * 100;
+  return `<div class="frame916 frame916-crop" data-role="crop" data-n="${n}"
+      style="${tileStyle(shot.thumbnail, n, 0,
+        sizeW, sizeH,
+        posPct(c.x, n * src.width, c.w), posPct(c.y, src.height, c.h))}"
+      role="img" aria-label="ผลลัพธ์ซีน ${shot.index + 1}"></div>`;
 }
 
 /* pad: ภาพเต็มกว้างวางกลาง พื้นหลังเบลอ ตรงกับที่ ffmpeg เรนเดอร์จริง */
-function padPreview(shot, src, bands) {
-  // โหมดตัดแถบทำให้ภาพที่เหลือเตี้ยลง กล่องที่วางกลางจึงเตี้ยตาม
+function padPreview(shot, src, bands, n) {
   const top = bands && bands.mode === "trim" ? bands.top : 0;
   const bottom = bands && bands.mode === "trim" ? bands.bottom : 0;
   const keep = Math.max(0.05, 1 - top - bottom);
-  const visibleRatio = src.width / (src.height * keep);
-  const fgHeightPct = ((9 / 16) / visibleRatio) * 100;
+  const fgHeightPct = ((9 / 16) / (src.width / (src.height * keep))) * 100;
+  const cover = ((src.width / src.height) / (9 / 16)) * 100;
+
+  const fg = tileStyle(shot.thumbnail, n, 0, n * 100, (1 / keep) * 100,
+    0, keep >= 1 ? 0 : (top / (1 - keep)) * 100);
+  const bg = tileStyle(shot.thumbnail, n, 0, n * cover, 100, 50 / n, 50);
 
   return `<div class="frame916 frame916-pad">
-    <img class="bg" src="${shot.thumbnail}" alt="" aria-hidden="true" loading="lazy" />
-    <span class="fg" style="top:${(100 - fgHeightPct) / 2}%;height:${fgHeightPct}%">
-      <img src="${shot.thumbnail}" alt="ผลลัพธ์ซีน ${shot.index + 1}" loading="lazy"
-           style="left:0;width:100%;height:${(1 / keep) * 100}%;top:${(-top / keep) * 100}%" />
-    </span>
+    <span class="bgwrap" data-role="bg" data-n="${n}" data-cover="${cover}" style="${bg}"></span>
+    <span class="fg" data-role="frame" data-n="${n}"
+        style="top:${(100 - fgHeightPct) / 2}%;height:${fgHeightPct}%;${fg}"
+        role="img" aria-label="ผลลัพธ์ซีน ${shot.index + 1}"></span>
   </div>`;
+}
+
+/* เลื่อนไปเฟรมที่ at ของ sprite — ขยับแค่ background-position-x */
+function showFrame(scrub, i) {
+  const n = Number(scrub.dataset.frames) || 1;
+  const at = Math.max(0, Math.min(n - 1, i));
+  if (scrub.dataset.at === String(at)) return;
+  scrub.dataset.at = String(at);
+
+  for (const node of scrub.querySelectorAll("[data-role]")) {
+    const parts = node.style.backgroundPosition.split(" ");
+    const y = parts[1] || "0%";
+    node.style.backgroundPosition = `${frameX(node, at, n)}% ${y}`;
+  }
+  const bar = scrub.querySelector(".scrub-bar i");
+  if (bar) bar.style.transform = `translateX(${at * 100}%) scaleX(${1 / n})`;
+}
+
+function frameX(node, at, n) {
+  const role = node.dataset.role;
+  if (role === "crop") {
+    // ต้องรู้ตำแหน่ง crop ในหน่วยของภาพเต็ม เก็บไว้ตอนสร้าง
+    const src = lastJob && lastJob.info;
+    const plan = planOf(node.closest(".shot").dataset.shot);
+    if (!src || !plan || !plan.crop) return 0;
+    const c = plan.crop;
+    return posPct(at * src.width + c.x, n * src.width, c.w);
+  }
+  if (role === "bg") {
+    const cover = Number(node.dataset.cover) || 100;
+    return posPct(at * cover + (cover - 100) / 2, n * cover, 100);
+  }
+  return n <= 1 ? 0 : (at / (n - 1)) * 100;
 }
 
 /* กรอบที่จะถูกเก็บจริง วาดทับภาพต้นฉบับ */
@@ -403,25 +511,28 @@ function deriveCrop(base, adjust, src) {
 function tuneControls(index, plan) {
   if (plan.mode !== "crop" || !plan.crop_base) return "";
   const a = { dx: 0, dy: 0, scale: 1, ...(plan.adjust || {}) };
-  const zoomed = a.scale < 0.999;
-  const touched = a.dx !== 0 || a.dy !== 0 || zoomed;
+  const touched = a.dx !== 0 || a.dy !== 0 || a.scale < 0.999;
   return `<div class="tune" data-index="${index}">
-    <label class="tune-row"><span>เลื่อน</span>
-      <input type="range" data-axis="dx" min="-100" max="100" step="1"
-             value="${Math.round(a.dx * 100)}" aria-label="เลื่อนกรอบซ้ายขวา" /></label>
     <label class="tune-row"><span>ซูม</span>
       <input type="range" data-axis="scale" min="40" max="100" step="1"
              value="${Math.round(a.scale * 100)}" aria-label="ย่อขยายกรอบ" /></label>
-    <label class="tune-row" ${zoomed ? "" : "hidden"}><span>ขึ้นลง</span>
-      <input type="range" data-axis="dy" min="-100" max="100" step="1"
-             value="${Math.round(a.dy * 100)}" aria-label="เลื่อนกรอบขึ้นลง" /></label>
     <button type="button" class="tune-reset" ${touched ? "" : "hidden"}>คืนค่าอัตโนมัติ</button>
   </div>`;
 }
 
-function readTune(node) {
-  const get = (axis) => Number(node.querySelector(`[data-axis="${axis}"]`).value);
-  return { dx: get("dx") / 100, dy: get("dy") / 100, scale: get("scale") / 100 };
+/* ค่าที่กำลังปรับอยู่ของแต่ละซีน — เก็บแยกจาก DOM เพราะตอนนี้ลากบนภาพ ไม่ได้อ่านจากสไลเดอร์อย่างเดียว */
+const pending = new Map();
+
+function currentAdjust(index) {
+  if (pending.has(index)) return { ...pending.get(index) };
+  const plan = planOf(index);
+  return { dx: 0, dy: 0, scale: 1, ...((plan && plan.adjust) || {}) };
+}
+
+function planOf(index) {
+  if (!lastJob) return null;
+  const shot = lastJob.shots.find((s) => s.index === Number(index));
+  return shot ? shot.plan : null;
 }
 
 function modeSwitch(index, mode) {
@@ -433,8 +544,30 @@ function modeSwitch(index, mode) {
 }
 
 function applyFilter() {
+  const counts = { all: 0, crop: 0, pad: 0, off: 0 };
+  const cards = [...ui.shots.querySelectorAll(".shot")];
+  for (const card of cards) {
+    counts.all += 1;
+    if (card.dataset.included !== "true") counts.off += 1;
+    if (card.dataset.mode === "crop") counts.crop += 1;
+    if (card.dataset.mode === "pad") counts.pad += 1;
+  }
+  // โชว์จำนวนบนปุ่มไปเลย จะได้ไม่ต้องกดแล้วเจอหน้าว่าง
+  for (const btn of document.querySelectorAll("[data-filter]")) {
+    const n = counts[btn.dataset.filter] ?? 0;
+    const label = btn.dataset.label ?? (btn.dataset.label = btn.textContent.trim());
+    btn.textContent = `${label} ${n}`;
+    btn.disabled = n === 0 && btn.dataset.filter !== "all";
+    if (btn.disabled && filter === btn.dataset.filter) {
+      filter = "all";
+      for (const o of document.querySelectorAll("[data-filter]")) {
+        o.classList.toggle("is-on", o.dataset.filter === "all");
+      }
+    }
+  }
+
   let shown = 0;
-  for (const card of ui.shots.querySelectorAll(".shot")) {
+  for (const card of cards) {
     const ok =
       filter === "all" ? true :
       filter === "off" ? card.dataset.included !== "true" :
@@ -542,13 +675,51 @@ ui.shots.addEventListener("change", (e) => {
   if (box) setIncluded(box.dataset.index, box.checked);
 });
 
-/* ลากสไลเดอร์ = พรีวิวขยับทันที (คำนวณฝั่ง client) ปล่อยเมื่อไหร่ค่อยส่งขึ้น server */
-async function commitTune(tune) {
-  const a = readTune(tune);
+/* ── ปรับกรอบ: ลากบนภาพเป็นหลัก สไลเดอร์ซูมเป็นตัวช่วย ── */
+
+function applyLive(index, adjust) {
+  const plan = planOf(index);
+  if (!plan || !plan.crop_base || !lastJob) return;
+  pending.set(String(index), adjust);
+
+  const card = ui.shots.querySelector(`[data-shot="${index}"]`);
+  if (!card) return;
+  const crop = deriveCrop(plan.crop_base, adjust, lastJob.info);
+  const src = lastJob.info;
+  const scrub = card.querySelector(".scrub");
+  const n = Number(scrub && scrub.dataset.frames) || 1;
+  const at = Number(scrub && scrub.dataset.at) || 0;
+
+  const box = card.querySelector('[data-role="crop"]');
+  if (box) {
+    box.style.backgroundSize =
+      `${(n * src.width / crop.w) * 100}% ${(src.height / crop.h) * 100}%`;
+    box.style.backgroundPosition =
+      `${posPct(at * src.width + crop.x, n * src.width, crop.w)}% ` +
+      `${posPct(crop.y, src.height, crop.h)}%`;
+  }
+  const keep = card.querySelector(".frame-keep");
+  if (keep) {
+    keep.style.left = `${(crop.x / src.width) * 100}%`;
+    keep.style.width = `${(crop.w / src.width) * 100}%`;
+  }
+  const reset = card.querySelector(".tune-reset");
+  if (reset) {
+    reset.hidden = adjust.dx === 0 && adjust.dy === 0 && adjust.scale >= 0.999;
+  }
+  const zoom = card.querySelector('[data-axis="scale"]');
+  if (zoom && document.activeElement !== zoom) {
+    zoom.value = String(Math.round(adjust.scale * 100));
+  }
+}
+
+async function commitAdjust(index) {
+  const a = pending.get(String(index));
+  if (!a || !jobId) return;
+  pending.delete(String(index));
   try {
     draw(await api(
-      `/api/jobs/${jobId}/shots/${tune.dataset.index}/crop` +
-      `?dx=${a.dx}&dy=${a.dy}&scale=${a.scale}`,
+      `/api/jobs/${jobId}/shots/${index}/crop?dx=${a.dx}&dy=${a.dy}&scale=${a.scale}`,
       { method: "POST" },
     ));
   } catch (err) {
@@ -556,71 +727,109 @@ async function commitTune(tune) {
   }
 }
 
+/* ลากบนภาพ = ขยับกรอบ — สายตาอยู่ที่ภาพ ไม่ต้องไปมองสไลเดอร์ */
+let drag = null;
+
+ui.shots.addEventListener("pointerdown", (e) => {
+  const scrub = e.target.closest(".scrub");
+  if (!scrub || e.button !== 0) return;
+  const card = scrub.closest(".shot");
+  const index = card.dataset.shot;
+  const plan = planOf(index);
+  if (!plan || plan.mode !== "crop" || !plan.crop_base) return;
+
+  const box = scrub.getBoundingClientRect();
+  drag = {
+    index, scrub, box, moved: false,
+    startX: e.clientX, startY: e.clientY,
+    from: currentAdjust(index),
+    base: plan.crop_base,
+  };
+  scrub.setPointerCapture(e.pointerId);
+});
+
+ui.shots.addEventListener("pointermove", (e) => {
+  if (!drag) {
+    // ไม่ได้ลาก = เลื่อนดูเฟรมในซีน
+    const scrub = e.target.closest(".scrub");
+    if (!scrub) return;
+    const box = scrub.getBoundingClientRect();
+    const n = Number(scrub.dataset.frames) || 1;
+    showFrame(scrub, Math.floor(((e.clientX - box.left) / box.width) * n));
+    return;
+  }
+
+  const dxPx = e.clientX - drag.startX;
+  const dyPx = e.clientY - drag.startY;
+  if (!drag.moved && Math.abs(dxPx) + Math.abs(dyPx) < 3) return;
+  drag.moved = true;
+  drag.scrub.classList.add("is-dragging");
+
+  const crop = deriveCrop(drag.base, drag.from, lastJob.info);
+  const next = { ...drag.from };
+  next.dx = drag.from.dx - (dxPx * (crop.w / drag.box.width)) / drag.base.w;
+  if (drag.from.scale < 0.999) {
+    next.dy = drag.from.dy - (dyPx * (crop.h / drag.box.height)) / (drag.base.h / 2);
+  }
+  next.dx = Math.max(-1, Math.min(1, next.dx));
+  next.dy = Math.max(-1, Math.min(1, next.dy));
+  applyLive(drag.index, next);
+});
+
+function endDrag(e) {
+  if (!drag) return;
+  const { index, moved, scrub } = drag;
+  drag = null;
+  scrub.classList.remove("is-dragging");
+  if (e) scrub.releasePointerCapture?.(e.pointerId);
+  if (moved) commitAdjust(index);
+}
+ui.shots.addEventListener("pointerup", endDrag);
+ui.shots.addEventListener("pointercancel", endDrag);
+
+/* หมุนล้อบนภาพ = ซูมกรอบ */
+let wheelTimer = null;
+ui.shots.addEventListener("wheel", (e) => {
+  const scrub = e.target.closest(".scrub");
+  if (!scrub) return;
+  const index = scrub.closest(".shot").dataset.shot;
+  const plan = planOf(index);
+  if (!plan || plan.mode !== "crop" || !plan.crop_base) return;
+  e.preventDefault();
+
+  const a = currentAdjust(index);
+  a.scale = Math.max(MIN_SCALE, Math.min(1, a.scale + (e.deltaY > 0 ? 0.03 : -0.03)));
+  applyLive(index, a);
+  clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => commitAdjust(index), 400);
+}, { passive: false });
+
 ui.shots.addEventListener("input", (e) => {
-  const slider = e.target.closest('.tune input[type="range"]');
-  if (!slider || !lastJob) return;
-  const tune = slider.closest(".tune");
-  const card = tune.closest(".shot");
-  const index = Number(tune.dataset.index);
-  const plan = (lastJob.shots.find((s) => s.index === index) || {}).plan;
-  if (!plan || !plan.crop_base) return;
-
-  const adjust = readTune(tune);
-  // ซูมออกสุดแล้วไม่มีที่ให้ขยับขึ้นลง ซ่อนสไลเดอร์นั้นไว้
-  tune.querySelectorAll(".tune-row")[2].hidden = adjust.scale >= 0.999;
-  tune.querySelector(".tune-reset").hidden =
-    adjust.dx === 0 && adjust.dy === 0 && adjust.scale >= 0.999;
-
-  const crop = deriveCrop(plan.crop_base, adjust, lastJob.info);
-  const img = card.querySelector(".frame916-crop img");
-  if (img) {
-    const src = lastJob.info;
-    img.style.width = `${(src.width / crop.w) * 100}%`;
-    img.style.height = `${(src.height / crop.h) * 100}%`;
-    img.style.left = `${(-crop.x / crop.w) * 100}%`;
-    img.style.top = `${(-crop.y / crop.h) * 100}%`;
-  }
-  const keep = card.querySelector(".frame-keep");
-  if (keep) {
-    keep.style.left = `${(crop.x / lastJob.info.width) * 100}%`;
-    keep.style.width = `${(crop.w / lastJob.info.width) * 100}%`;
-  }
+  const slider = e.target.closest('[data-axis="scale"]');
+  if (!slider) return;
+  const index = slider.closest(".shot").dataset.shot;
+  const a = currentAdjust(index);
+  a.scale = Number(slider.value) / 100;
+  applyLive(index, a);
 });
 
 ui.shots.addEventListener("change", (e) => {
-  const slider = e.target.closest('.tune input[type="range"]');
-  if (slider && jobId) commitTune(slider.closest(".tune"));
+  const slider = e.target.closest('[data-axis="scale"]');
+  if (slider) commitAdjust(slider.closest(".shot").dataset.shot);
 });
 
 ui.shots.addEventListener("click", (e) => {
   const reset = e.target.closest(".tune-reset");
   if (!reset || !jobId) return;
-  const tune = reset.closest(".tune");
-  tune.querySelector('[data-axis="dx"]').value = "0";
-  tune.querySelector('[data-axis="dy"]').value = "0";
-  tune.querySelector('[data-axis="scale"]').value = "100";
-  commitTune(tune);
+  const index = reset.closest(".shot").dataset.shot;
+  pending.set(String(index), { dx: 0, dy: 0, scale: 1 });
+  commitAdjust(index);
 });
 
-/* คีย์ลัด — งานนี้ต้องไล่ตรวจ 40 กว่าซีนต่อคลิป การใช้เมาส์อย่างเดียวช้าเกินไป */
-ui.shots.addEventListener("keydown", (e) => {
-  const card = e.target.closest(".shot");
-  if (!card || e.metaKey || e.ctrlKey || e.altKey) return;
-  const index = card.dataset.shot;
-  const key = e.key.toLowerCase();
-
-  if (e.key === " ") {
-    e.preventDefault();
-    setIncluded(index, card.dataset.included !== "true");
-  } else if (key === "c" || key === "p") {
-    e.preventDefault();
-    setMode(index, key === "c" ? "crop" : "pad");
-  } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-    const cards = [...ui.shots.querySelectorAll(".shot:not([hidden])")];
-    const next = cards[cards.indexOf(card) + (e.key === "ArrowRight" ? 1 : -1)];
-    if (next) { e.preventDefault(); next.focus(); }
-  }
-});
+ui.shots.addEventListener("pointerleave", (e) => {
+  const scrub = e.target.closest && e.target.closest(".scrub");
+  if (scrub && !drag) showFrame(scrub, 0);
+}, true);
 
 for (const btn of document.querySelectorAll("[data-view]")) {
   btn.onclick = () => {
@@ -706,18 +915,60 @@ ui.renderBtn.onclick = async () => {
       ui.done.innerHTML =
         `<a href="/api/jobs/${job.id}/output">ดาวน์โหลดไฟล์ 9:16</a>` +
         `<a href="/api/jobs/${job.id}/checklist">checklist กราฟฟิก</a>` +
+        `<button type="button" class="btn btn-quiet btn-sm" id="reveal-btn">เปิดโฟลเดอร์</button>` +
         `<span class="path"></span>`;
       ui.done.querySelector(".path").textContent = job.output;
+      el("reveal-btn").onclick = () =>
+        api(`/api/jobs/${job.id}/reveal`, { method: "POST" }).catch((err) =>
+          showError(err.message));
     } else if (job.status === "error") {
       clearInterval(poll);
       ui.renderBtn.disabled = false;
       ui.renderStep.textContent = "";
-      showError(job.error || "render ไม่สำเร็จ");
+      showError(job.error || "สร้างไฟล์ไม่สำเร็จ");
+    } else if (job.status === "ready") {
+      // ยกเลิกกลางคัน
+      clearInterval(poll);
+      ui.renderBtn.disabled = false;
+      ui.cancelBtn.hidden = true;
+      ui.renderTrack.hidden = true;
+      ui.renderStep.textContent = job.step;
+      watch(jobId);
     }
   }, 700);
 };
 
 /* ── ผูก event ───────────────────────────────────────── */
+
+async function doUndo() {
+  if (!jobId || ui.undoBtn.disabled) return;
+  try {
+    draw(await api(`/api/jobs/${jobId}/undo`, { method: "POST" }));
+  } catch (err) {
+    showError(err.message);
+  }
+}
+
+ui.undoBtn.onclick = doUndo;
+
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+    e.preventDefault();
+    doUndo();
+  }
+});
+
+ui.cancelBtn.onclick = async () => {
+  if (!jobId) return;
+  ui.cancelBtn.disabled = true;
+  try {
+    await api(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    ui.cancelBtn.disabled = false;
+  }
+};
 
 ui.browse.onclick = () => ui.fileInput.click();
 ui.fileInput.onchange = (e) => e.target.files[0] && uploadFile(e.target.files[0]);
