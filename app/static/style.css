@@ -31,6 +31,8 @@
   --pad:       oklch(0.800 0.120 250);
   --pad-soft:  oklch(0.800 0.120 250 / 0.14);
   --danger:    oklch(0.720 0.170 25);
+  --warn:      oklch(0.815 0.135 75);
+  --warn-soft: oklch(0.815 0.135 75 / 0.14);
 
   --r-sm: 6px;
   --r-md: 10px;
@@ -70,6 +72,8 @@
     --pad:       oklch(0.462 0.132 255);
     --pad-soft:  oklch(0.500 0.130 255 / 0.12);
     --danger:    oklch(0.530 0.190 27);
+    --warn:      oklch(0.470 0.115 65);
+    --warn-soft: oklch(0.470 0.115 65 / 0.12);
   }
 }
 
@@ -854,4 +858,24 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .shot.is-flash { outline-width: 3px; }
+}
+
+/* ── คำเตือนเสียงพูด ───────────────────────────────── */
+
+.warn {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--warn);
+  min-height: 2.18em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.chip-warn {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-soft);
 }

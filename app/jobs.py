@@ -28,6 +28,7 @@ from app.analyze import (
     shot_from_dict,
     shot_to_dict,
 )
+from app.audio import measure_shots
 from app.bands import Bands
 from app.detect import (
     ShotDetections,
@@ -60,6 +61,7 @@ class Job:
     subtitle_hint: float = 0.0
     # เก็บผลตรวจจับไว้ เพื่อคำนวณแผนใหม่ตอนคนขยับแถบซับได้ทันทีโดยไม่ต้องตรวจซ้ำ
     detections: list[ShotDetections] = field(default_factory=list)
+    audio: dict = field(default_factory=dict)
     # ประวัติ plan สำหรับ undo — งานตรวจ 40 กว่าซีนพลาดทีนึงแล้วย้อนไม่ได้คือฝันร้าย
     history: list[dict] = field(default_factory=list)
     cancel: bool = False
@@ -136,6 +138,7 @@ class JobStore:
             "checklist": job.checklist,
             "detections": detections_to_dict(job.detections),
             "subtitle_hint": job.subtitle_hint,
+            "audio": {str(k): v for k, v in job.audio.items()},
         }
         tmp = dest.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -161,6 +164,7 @@ class JobStore:
                     shots=[shot_from_dict(x) for x in data["shots"]],
                     detections=detections_from_dict(data.get("detections", [])),
                     subtitle_hint=data.get("subtitle_hint", 0.0),
+                    audio={int(k): v for k, v in (data.get("audio") or {}).items()},
                 )
                 with self._lock:
                     self._jobs[job.id] = job
@@ -198,7 +202,9 @@ class JobStore:
         # การตัดสินใจของคนต้องรอดจากการคำนวณใหม่ ไม่งั้นขยับแถบทีเดียวงานที่ตรวจไว้หายหมด
         keep = {s["shot_index"]: s for s in job.plan["shots"]}
         info = _info_from(job)
-        job.plan = build_plan(job.source, info, job.shots, job.detections, bands)
+        job.plan = build_plan(
+            job.source, info, job.shots, job.detections, bands, audio=job.audio
+        )
 
         for shot_plan in job.plan["shots"]:
             old = keep.get(shot_plan["shot_index"])
@@ -354,9 +360,15 @@ class JobStore:
             )
             job.progress = 0.92
 
+            job.step = "วัดระดับเสียงแต่ละซีน"
+            try:
+                job.audio = measure_shots(job.source, shots)
+            except Exception:  # noqa: BLE001 — วัดเสียงไม่ได้ไม่ควรล้มทั้งงาน
+                job.audio = {}
+
             job.step = "ตัดสินว่าซีนไหน crop ได้ ซีนไหนต้องย่อ"
             job.detections = detections
-            job.plan = build_plan(job.source, info, shots, detections)
+            job.plan = build_plan(job.source, info, shots, detections, audio=job.audio)
             job.subtitle_hint = _subtitle_hint(shots, detections)
             _write_plan(self.work_dir / job.id / "edit-plan.json", job.plan)
 

@@ -64,6 +64,9 @@ class ShotPlan:
     # กรอบฐานที่เครื่องคำนวณ เก็บไว้เพื่อให้คนปรับเป็น "ส่วนต่าง" ได้โดยไม่เสียการ tracking
     crop_base: dict | None = None
     adjust: dict | None = None  # {dx, dy, scale} — dx/dy เป็นสัดส่วนของกรอบ
+    # มีเสียงพูดในซีนนี้มั้ย ใช้เตือนตอนคนจะตัดซีนออก
+    has_speech: bool = False
+    audio_db: float | None = None
 
     def as_dict(self) -> dict:
         return {**asdict(self), "duration": round(self.end - self.start, 3)}
@@ -237,12 +240,17 @@ def plan_shot(
 
 def summarise(shots: list[dict]) -> dict:
     included = [s for s in shots if s.get("included", True)]
+    dropped_speech = [
+        s for s in shots if not s.get("included", True) and s.get("has_speech")
+    ]
     return {
         "total": len(shots),
         "included": len(included),
         "crop": sum(1 for s in included if s["mode"] == "crop"),
         "pad": sum(1 for s in included if s["mode"] == "pad"),
         "duration": round(sum(s["end"] - s["start"] for s in included), 2),
+        # ตัดซีนที่มีคนพูดออก = ประโยคขาดกลางคัน ต้องเตือน
+        "dropped_with_speech": len(dropped_speech),
     }
 
 
@@ -252,12 +260,17 @@ def build_plan(
     shots: list[Shot],
     detections: list[ShotDetections],
     bands: Bands | None = None,
+    audio: dict[int, dict] | None = None,
 ) -> dict:
     """edit plan — contract กลางที่ทุก module คุยกันผ่านมัน (ดู CLAUDE.md)"""
     bands = bands or Bands()
     by_index = {d.shot_index: d for d in detections}
     plans = [plan_shot(s, info, by_index[s.index], bands) for s in shots]
     shot_dicts = [p.as_dict() for p in plans]
+    for d in shot_dicts:
+        level = (audio or {}).get(d["shot_index"]) or {}
+        d["has_speech"] = bool(level.get("has_speech"))
+        d["audio_db"] = level.get("db")
     return {
         "version": 2,
         "source": source.name,

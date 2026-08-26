@@ -418,3 +418,54 @@ def test_undo_walks_back_one_edit_at_a_time(sample):
         assert client.post(f"/api/jobs/{jid}/undo").status_code == 400
     finally:
         dest.unlink(missing_ok=True)
+
+
+# ── เตือนเมื่อตัดซีนที่มีคนพูดออก ───────────────────────────
+
+def test_quiet_and_loud_shots_are_told_apart(tmp_path):
+    """ซีนเงียบกับซีนที่มีเสียงต้องแยกออกจากกันได้จากระดับเสียง"""
+    import subprocess
+
+    from app.analyze import Shot
+    from app.audio import measure_shots
+
+    path = tmp_path / "mixed.mp4"
+    # 2 วิแรกมีเสียง 2 วิหลังเงียบสนิท
+    subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "sine=frequency=300:duration=2",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:duration=2",
+            "-f", "lavfi", "-i", "color=c=gray:size=320x180:rate=25:duration=4",
+            "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a]",
+            "-map", "2:v", "-map", "[a]", "-shortest",
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", str(path),
+        ],
+        check=True, capture_output=True,
+    )
+    shots = [Shot(index=0, start=0.0, end=2.0), Shot(index=1, start=2.0, end=4.0)]
+    levels = measure_shots(path, shots)
+    assert levels[0]["has_speech"] is True, levels
+    assert levels[1]["has_speech"] is False, levels
+    assert levels[0]["db"] > levels[1]["db"] + 20
+
+    # ต้องเป็น type ของ Python ล้วน ไม่งั้นเซฟงานลงดิสก์ไม่ได้
+    import json
+    json.dumps(levels)
+
+
+def test_dropping_a_loud_shot_is_counted_in_the_summary():
+    from app.plan import summarise
+
+    shots = [
+        {"shot_index": 0, "start": 0, "end": 2, "mode": "crop", "included": True,
+         "has_speech": True},
+        {"shot_index": 1, "start": 2, "end": 4, "mode": "pad", "included": False,
+         "has_speech": True},
+        {"shot_index": 2, "start": 4, "end": 6, "mode": "pad", "included": False,
+         "has_speech": False},
+    ]
+    s = summarise(shots)
+    assert s["included"] == 1
+    # ตัดออก 2 ซีน แต่มีแค่ซีนเดียวที่มีคนพูด — เตือนเฉพาะอันนั้น
+    assert s["dropped_with_speech"] == 1

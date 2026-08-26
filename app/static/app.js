@@ -319,7 +319,10 @@ function drawTally(summary) {
     `<span class="chip">เลือก ${summary.included}/${summary.total} ซีน</span>` +
     `<span class="chip chip-crop">เต็มจอ ${summary.crop}</span>` +
     `<span class="chip chip-pad">ย่อทั้งภาพ ${summary.pad}</span>` +
-    `<span class="chip">${tc(summary.duration)}</span>`;
+    `<span class="chip">${tc(summary.duration)}</span>` +
+    (summary.dropped_with_speech
+      ? `<span class="chip chip-warn">ตัดซีนที่มีคนพูดออก ${summary.dropped_with_speech}</span>`
+      : "");
   ui.renderBtn.disabled = summary.included === 0;
 }
 
@@ -329,7 +332,7 @@ function drawShots(job) {
     const p = shot.plan;
     const key = [
       view, shot.thumbnail || "",
-      p ? `${p.mode}|${p.included}` : "",
+      p ? `${p.mode}|${p.included}|${p.has_speech}` : "",
       p && p.crop ? `${p.crop.x}:${p.crop.y}:${p.crop.w}:${p.crop.h}` : "",
       p && p.adjust ? `${p.adjust.dx}:${p.adjust.dy}:${p.adjust.scale}` : "",
       job.bands ? `${job.bands.top}:${job.bands.bottom}:${job.bands.mode}` : "",
@@ -372,7 +375,9 @@ function drawShots(job) {
         </div>
         ${p ? modeSwitch(shot.index, p.mode) : ""}
         ${p ? tuneControls(shot.index, p) : ""}
-        ${p ? `<p class="reason">${p.reason}</p>` : ""}
+        ${!included && p && p.has_speech
+          ? `<p class="warn">ซีนนี้มีคนพูดอยู่ ตัดออกแล้วประโยคจะขาดกลางคัน</p>`
+          : p ? `<p class="reason">${p.reason}</p>` : ""}
       </div>`;
   }
 }
