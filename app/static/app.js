@@ -251,7 +251,6 @@ function draw(job) {
 
   drawTally(job.summary);
   drawShots(job);
-  sizeBar();
 }
 
 function drawTally(summary) {
@@ -550,14 +549,6 @@ for (const btn of document.querySelectorAll("[data-band-mode]")) {
     refreshPreview();
   };
 }
-
-/* แถบล่างสูงไม่คงที่ (มีแถว progress/ผลลัพธ์เพิ่มเข้ามา) วัดจริงแล้วเผื่อที่ให้เนื้อหา
-   ไม่งั้นการ์ดแถวสุดท้ายจะโดนบัง */
-function sizeBar() {
-  const h = ui.actionbar.hidden ? 0 : ui.actionbar.getBoundingClientRect().height;
-  document.documentElement.style.setProperty("--bar-h", `${Math.ceil(h)}px`);
-}
-new ResizeObserver(sizeBar).observe(ui.actionbar);
 
 ui.preview.dataset.state = "empty";
 loadSources();

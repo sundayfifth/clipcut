@@ -35,7 +35,6 @@
   --z-bar: 20;
 
   --rail-w: 320px;
-  --bar-h: 68px;
 
   --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Noto Sans Thai",
           "IBM Plex Sans Thai", "Segoe UI", sans-serif;
@@ -70,12 +69,11 @@
 /* display: grid/flex ด้านล่างจะทับ [hidden] ถ้าไม่บังคับไว้ตรงนี้ */
 [hidden] { display: none !important; }
 
-/* ห้ามใส่ height: 100% ที่ body — padding-bottom จะไม่ขยาย scroll height
-   ทำให้การ์ดแถวสุดท้ายมุดใต้แถบล่างที่ position: fixed */
 body {
   margin: 0;
-  min-height: 100%;
-  padding-bottom: calc(var(--bar-h) + 1rem);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   color: var(--ink);
   font: 15px/1.6 var(--font);
@@ -126,7 +124,7 @@ code {
   grid-template-columns: var(--rail-w) minmax(0, 1fr);
   align-items: start;
   gap: 0;
-  min-height: calc(100vh - var(--bar-h));
+  flex: 1;
 }
 
 .rail {
@@ -545,9 +543,11 @@ input[type="range"]::-moz-range-thumb {
 
 /* ── แถบสร้างไฟล์ ─────────────────────────────────────── */
 
+/* sticky ไม่ใช่ fixed — มันกินที่ใน layout เองอยู่แล้ว ไม่ต้องวัดความสูงมาเผื่อที่
+   (เคยใช้ fixed + ResizeObserver แล้วเกิด feedback loop จนแถบโตไม่หยุดบังทั้งหน้า) */
 .actionbar {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
+  position: sticky;
+  bottom: 0;
   z-index: var(--z-bar);
   background: var(--surface);
   border-top: 1px solid var(--line);
@@ -559,7 +559,7 @@ input[type="range"]::-moz-range-thumb {
   gap: 1rem;
   flex-wrap: wrap;
   padding: 0.85rem 1.5rem;
-  min-height: var(--bar-h);
+  min-height: 68px;
 }
 .actionbar-right { display: flex; align-items: center; gap: 0.85rem; }
 

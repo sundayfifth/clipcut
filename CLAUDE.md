@@ -48,9 +48,8 @@ test: `pytest` (ต้องมี ffmpeg — test สร้างคลิป�
 ## UI
 
 ธีมเข้มเป็นหลัก (งานคือจ้อง thumbnail ทั้งวัน) accent เทียลตามโลโก้ของแบรนด์
-- **ห้ามใส่ `height: 100%` ที่ `body`** — `padding-bottom` จะไม่ขยาย scroll height ทำให้การ์ดแถวสุดท้ายมุดใต้แถบ `position: fixed` ด้านล่าง
+- **แถบสร้างไฟล์ด้านล่างต้องเป็น `position: sticky` ห้ามใช้ `fixed`** — sticky กินที่ใน layout เองอยู่แล้ว ไม่ต้องวัดความสูงมาเผื่อที่ เคยใช้ `fixed` + ResizeObserver วัดความสูงไปตั้ง `--bar-h` แล้วเกิด feedback loop (padding เปลี่ยน → scrollbar โผล่ → ข้อความในแถบขึ้นบรรทัดใหม่ → แถบสูงขึ้น → วัดใหม่) จนแถบโตไม่หยุดบังทั้งหน้า
 - `[hidden] { display: none !important }` จำเป็น เพราะ `display: grid/flex` ทับ `[hidden]`
-- ความสูงแถบล่างไม่คงที่ วัดด้วย ResizeObserver แล้วเขียนลง `--bar-h`
 - contrast ผ่าน WCAG AA ทั้งสองธีม (ตรวจแล้ว: ink-faint บน surface = 5.6 dark / 5.8 light)
 
 ## Docs
