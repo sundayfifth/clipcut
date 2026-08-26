@@ -22,7 +22,9 @@
 
 **ห้ามใช้ `ultralytics` (YOLO)** — เป็น AGPL-3.0 และ Ultralytics ระบุเองว่า internal business tool แบบ clipcut ต้องซื้อ Enterprise License รวมถึงห้าม depend repo ที่ depend มันด้วย ใช้ MediaPipe (Apache 2.0) เป็นหลัก + RF-DETR รุ่น Nano/Small/Medium/Large (Apache 2.0) เมื่อต้องการ multi-person — เลี่ยงรุ่น XL/2XL ที่เป็น PML 1.0
 
-**ยังไม่ตัดสินใจ** (อย่าเพิ่งติดตั้งจนกว่าจะสรุป): OCR ภาษาไทยสำหรับ burned-in text และวิธี export ไป CapCut/Hyperframe — ดู `docs/2026-08-25-research-auto-reframe.md` หัวข้อ "ยังไม่ได้คำตอบ"
+**Output format ตัดสินแล้ว**: deliverable คือ `.mp4` 9:16 + `.srt` + checklist ไม่ใช่ project file — CapCut ไม่รองรับ import timeline จาก NLE อื่นเลย (ยืนยันจาก help center ของ CapCut เอง) แต่ import SRT ได้เป็น text clip แยกชิ้นที่แก้ได้ **ไม่ต้องทำ OTIO/EDL/FCPXML** และห้ามให้ draft-folder generation เป็นทางเดียวที่ output ออกได้ — ดู `docs/2026-08-25-research-nle-export.md`
+
+**ยังไม่ตัดสินใจ**: OCR ภาษาไทยสำหรับ burned-in text (ยังไม่ได้วิจัย) และ Hyperframe รองรับ import อะไร (หาข้อมูลไม่เจอเลย ต้องเปิดโปรแกรมดูเอง)
 
 ## Running it
 
