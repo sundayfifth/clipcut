@@ -61,6 +61,9 @@ class ShotPlan:
     confidence: float  # สัดส่วนเฟรมที่เจอคน
     included: bool = True  # เอาซีนนี้ไปประกอบเป็นไฟล์ 9:16 มั้ย
     path: dict | None = None  # เส้นทางกล้อง {kind: static|poly, coeffs: [...]}
+    # กรอบฐานที่เครื่องคำนวณ เก็บไว้เพื่อให้คนปรับเป็น "ส่วนต่าง" ได้โดยไม่เสียการ tracking
+    crop_base: dict | None = None
+    adjust: dict | None = None  # {dx, dy, scale} — dx/dy เป็นสัดส่วนของกรอบ
 
     def as_dict(self) -> dict:
         return {**asdict(self), "duration": round(self.end - self.start, 3)}
@@ -112,6 +115,45 @@ def _co_subject_conflicts(frames: list[list[Box]], crop_w: float) -> float:
         if max(centers) - min(centers) > crop_w:
             conflicts += 1
     return conflicts / len(frames) if frames else 0.0
+
+
+DEFAULT_ADJUST = {"dx": 0.0, "dy": 0.0, "scale": 1.0}
+
+# ซูมเข้าได้ถึง 40% ของกรอบเต็ม แคบกว่านั้นภาพจะแตกเพราะต้องขยายขึ้น 1080px
+MIN_SCALE = 0.40
+MAX_SCALE = 1.00
+
+
+def clamp_adjust(adjust: dict | None) -> dict:
+    a = {**DEFAULT_ADJUST, **(adjust or {})}
+    return {
+        "dx": max(-1.0, min(1.0, float(a["dx"]))),
+        "dy": max(-1.0, min(1.0, float(a["dy"]))),
+        "scale": max(MIN_SCALE, min(MAX_SCALE, float(a["scale"]))),
+    }
+
+
+def derive_crop(base: dict, adjust: dict | None, info: VideoInfo) -> dict:
+    """กรอบจริง = กรอบฐานที่เครื่องคำนวณ + ส่วนต่างที่คนปรับ
+
+    เก็บเป็นส่วนต่างแทนที่จะทับค่าไปเลย เพื่อให้ยัง fit เส้นทางกล้องตามคนได้อยู่
+    แค่เลื่อน/ย่อกรอบทั้งเส้นตามที่คนสั่ง
+    """
+    a = clamp_adjust(adjust)
+    w = base["w"] * a["scale"]
+    h = base["h"] * a["scale"]
+
+    center_x = base["center_x"] + a["dx"] * base["w"]
+    left = max(0.0, min(center_x - w / 2, info.width - w))
+
+    # ย่อกรอบแล้วเหลือที่ให้ขยับแนวตั้ง — เลื่อนจากกึ่งกลางของแถบที่ใช้ได้
+    span_top = base["y"]
+    span_h = base["h"]
+    center_y = span_top + span_h / 2 + a["dy"] * span_h / 2
+    top = max(float(span_top), min(center_y - h / 2, span_top + span_h - h))
+
+    return {"x": int(round(left)), "y": int(round(top)),
+            "w": int(round(w)), "h": int(round(h))}
 
 
 def plan_shot(
@@ -167,14 +209,9 @@ def plan_shot(
             crop=None, **common,
         )
 
-    left = (lo + hi) / 2 - crop_w / 2
-    left = max(0.0, min(left, info.width - crop_w))
-    crop = {
-        "x": int(round(left)),
-        "y": crop_y,
-        "w": int(round(crop_w)),
-        "h": int(round(crop_h)),
-    }
+    base = {"center_x": (lo + hi) / 2, "w": crop_w, "h": crop_h, "y": crop_y}
+    crop = derive_crop(base, None, info)
+    common["crop_base"] = base
 
     if drift <= STATIC_THRESHOLD_PX:
         return ShotPlan(

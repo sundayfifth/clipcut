@@ -295,3 +295,65 @@ def test_checklist_names_what_the_editor_must_redo():
     assert "subtitle-align" in text        # ชี้ไปที่ skill ที่มีอยู่
     assert "ตัดข้างซ้าย 400px" in text     # บอกว่าหายไปเท่าไหร่
     assert "ซีนที่ข้ามไป" in text          # ซีนที่ไม่ได้เลือกต้องถูกระบุ
+
+
+# ── ปรับกรอบเอง ──────────────────────────────────────────────
+
+def test_adjusted_crop_keeps_9x16_and_stays_inside_the_frame():
+    from app.analyze import VideoInfo
+    from app.plan import derive_crop
+
+    info = VideoInfo(width=1280, height=720, duration=10, fps=30)
+    base = {"center_x": 640.0, "w": 405.0, "h": 720.0, "y": 0}
+
+    for adjust in [None, {"dx": -1}, {"dx": 1}, {"scale": 0.4},
+                   {"scale": 0.5, "dx": 0.9, "dy": -1}, {"scale": 0.01, "dx": 5}]:
+        c = derive_crop(base, adjust, info)
+        assert c["x"] >= 0 and c["x"] + c["w"] <= info.width, (adjust, c)
+        assert c["y"] >= 0 and c["y"] + c["h"] <= info.height, (adjust, c)
+        assert abs(c["w"] / c["h"] - 9 / 16) < 0.01, (adjust, c)
+
+
+def test_zoom_is_clamped_so_output_never_upscales_too_far():
+    from app.plan import MIN_SCALE, clamp_adjust
+
+    assert clamp_adjust({"scale": 0.01})["scale"] == MIN_SCALE
+    assert clamp_adjust({"scale": 99})["scale"] == 1.0
+    assert clamp_adjust({"dx": -9})["dx"] == -1.0
+
+
+def test_crop_can_be_nudged_and_survives_a_band_change(sample):
+    dest = INPUT_DIR / "pytest-tune.mp4"
+    shutil.copy(sample, dest)
+    try:
+        job = client.post("/api/jobs", params={"name": dest.name}).json()
+        job = _wait(job["id"], "ready")
+        jid = job["id"]
+
+        # หาซีนที่เป็นโหมด crop มาปรับ (ถ้าไม่มีก็พลิกให้เป็น crop ก่อน)
+        idx = next((s["index"] for s in job["shots"] if s["plan"]["mode"] == "crop"), None)
+        if idx is None:
+            idx = 0
+            client.post(f"/api/jobs/{jid}/shots/0/mode", params={"mode": "crop"})
+
+        before = client.get(f"/api/jobs/{jid}").json()["shots"][idx]["plan"]["crop"]["x"]
+        job = client.post(
+            f"/api/jobs/{jid}/shots/{idx}/crop", params={"dx": 0.3, "scale": 0.6}
+        ).json()
+        plan = job["shots"][idx]["plan"]
+        assert plan["adjust"] == {"dx": 0.3, "dy": 0.0, "scale": 0.6}
+        assert plan["crop"]["x"] != before          # กรอบขยับจริง
+        assert plan["crop"]["w"] < plan["crop_base"]["w"]  # ซูมเข้าจริง
+
+        # ขยับแถบซับแล้วคำนวณใหม่ ค่าที่ปรับเองต้องไม่หาย
+        job = client.post(f"/api/jobs/{jid}/bands", params={"bottom": 0.1}).json()
+        assert job["shots"][idx]["plan"]["adjust"]["scale"] == 0.6
+
+        # ซีนที่เป็นโหมดย่อทั้งภาพ ปรับกรอบไม่ได้
+        pad = next((s["index"] for s in job["shots"] if s["plan"]["mode"] == "pad"), None)
+        if pad is not None:
+            assert client.post(
+                f"/api/jobs/{jid}/shots/{pad}/crop", params={"dx": 0.2}
+            ).status_code == 400
+    finally:
+        dest.unlink(missing_ok=True)

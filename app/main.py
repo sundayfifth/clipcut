@@ -28,7 +28,7 @@ for _sub in ("input", "work", "output"):
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
-app = FastAPI(title="clipcut", version="0.4.0")
+app = FastAPI(title="clipcut", version="0.5.0")
 jobs = JobStore(WORK_DIR, OUTPUT_DIR)
 
 
@@ -156,6 +156,18 @@ def set_shot_included(job_id: str, shot_index: int, included: bool) -> dict:
     job = _require_job(job_id)
     try:
         jobs.set_included(job, shot_index, included)
+    except AnalyzeError as err:
+        raise HTTPException(400, str(err)) from err
+    return job.as_dict()
+
+
+@app.post("/api/jobs/{job_id}/shots/{shot_index}/crop")
+def set_shot_crop(job_id: str, shot_index: int,
+                  dx: float = 0.0, dy: float = 0.0, scale: float = 1.0) -> dict:
+    """เลื่อนกรอบซ้าย-ขวา บน-ล่าง และย่อ/ขยาย เฉพาะซีนที่เป็นโหมดเต็มจอ"""
+    job = _require_job(job_id)
+    try:
+        jobs.set_crop_adjust(job, shot_index, {"dx": dx, "dy": dy, "scale": scale})
     except AnalyzeError as err:
         raise HTTPException(400, str(err)) from err
     return job.as_dict()

@@ -29,7 +29,7 @@ from app.analyze import (
 from app.bands import Bands
 from app.detect import ShotDetections, detect_people
 from app.ingest import download_youtube, is_youtube_url
-from app.plan import build_plan, summarise
+from app.plan import build_plan, clamp_adjust, derive_crop, summarise
 from app.render import render_plan
 from app.report import build_checklist
 
@@ -113,12 +113,52 @@ class JobStore:
         if job.status not in ("ready", "done") or not job.detections:
             raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะตั้งแถบได้")
 
-        included = {s["shot_index"]: s.get("included", True) for s in job.plan["shots"]}
+        # การตัดสินใจของคนต้องรอดจากการคำนวณใหม่ ไม่งั้นขยับแถบทีเดียวงานที่ตรวจไว้หายหมด
+        keep = {s["shot_index"]: s for s in job.plan["shots"]}
         info = _info_from(job)
         job.plan = build_plan(job.source, info, job.shots, job.detections, bands)
+
         for shot_plan in job.plan["shots"]:
-            shot_plan["included"] = included.get(shot_plan["shot_index"], True)
+            old = keep.get(shot_plan["shot_index"])
+            if not old:
+                continue
+            shot_plan["included"] = old.get("included", True)
+
+            if old.get("manual_mode"):
+                shot_plan["mode"] = old["mode"]
+                shot_plan["manual_mode"] = True
+                shot_plan["reason"] = "คนเลือกเอง"
+                if old["mode"] == "crop" and not shot_plan.get("crop_base"):
+                    # เครื่องคำนวณให้เป็น pad รอบนี้ จึงไม่มีกรอบฐาน สร้างจากกลางเฟรมแทน
+                    shot_plan["crop_base"] = _base_from_center(job.plan, bands, info)
+
+            adjust = old.get("adjust")
+            if adjust and shot_plan.get("crop_base"):
+                shot_plan["adjust"] = adjust
+                shot_plan["crop"] = derive_crop(shot_plan["crop_base"], adjust, info)
+            elif shot_plan.get("crop_base"):
+                shot_plan["crop"] = derive_crop(shot_plan["crop_base"], None, info)
+
         job.plan["summary"] = summarise(job.plan["shots"])
+
+    def set_crop_adjust(self, job: Job, shot_index: int, adjust: dict) -> None:
+        """เลื่อน/ย่อกรอบเอง — เก็บเป็นส่วนต่างจากกรอบที่เครื่องคำนวณ"""
+        if job.status not in ("ready", "done"):
+            raise AnalyzeError("ต้องรอวิเคราะห์เสร็จก่อนถึงจะปรับกรอบได้")
+
+        for shot_plan in job.plan["shots"]:
+            if shot_plan["shot_index"] != shot_index:
+                continue
+            if shot_plan["mode"] != "crop":
+                raise AnalyzeError("ปรับกรอบได้เฉพาะซีนที่เป็นโหมดเต็มจอ")
+            base = shot_plan.get("crop_base")
+            if not base:
+                raise AnalyzeError("ซีนนี้ไม่มีกรอบฐานให้ปรับ")
+            clean = clamp_adjust(adjust)
+            shot_plan["adjust"] = clean
+            shot_plan["crop"] = derive_crop(base, clean, _info_from(job))
+            return
+        raise AnalyzeError(f"ไม่พบซีนที่ {shot_index + 1}")
 
     def set_included(self, job: Job, shot_index: int, included: bool) -> None:
         if job.status not in ("ready", "done"):
@@ -143,7 +183,14 @@ class JobStore:
                 if mode == "crop" and not shot_plan.get("crop"):
                     # เครื่องไม่ได้คำนวณกรอบไว้ให้ ใช้กรอบกลางเฟรมเป็นค่าตั้งต้น
                     shot_plan["crop"] = _center_crop(job.plan)
+                if mode == "crop" and not shot_plan.get("crop_base"):
+                    c = shot_plan["crop"]
+                    shot_plan["crop_base"] = {
+                        "center_x": c["x"] + c["w"] / 2, "w": c["w"],
+                        "h": c["h"], "y": c["y"],
+                    }
                 shot_plan["mode"] = mode
+                shot_plan["manual_mode"] = True
                 shot_plan["reason"] = "คนเลือกเอง"
                 break
         else:
@@ -268,6 +315,14 @@ def _info_from(job: Job):
 
     i = job.info
     return VideoInfo(width=i["width"], height=i["height"], duration=i["duration"], fps=i["fps"])
+
+
+def _base_from_center(plan: dict, bands, info) -> dict:
+    """กรอบฐานกลางเฟรม ใช้ตอนคนสั่งให้เป็นเต็มจอทั้งที่เครื่องไม่ได้คำนวณกรอบไว้ให้"""
+    h = bands.effective_height(info.height)
+    w = min(info.width, h * plan["target_size"]["width"] / plan["target_size"]["height"])
+    return {"center_x": info.width / 2, "w": float(w), "h": float(h),
+            "y": bands.offset_y(info.height)}
 
 
 def _center_crop(plan: dict) -> dict:

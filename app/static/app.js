@@ -279,12 +279,17 @@ function drawShots(job) {
       view, shot.thumbnail || "",
       p ? `${p.mode}|${p.included}` : "",
       p && p.crop ? `${p.crop.x}:${p.crop.y}:${p.crop.w}:${p.crop.h}` : "",
+      p && p.adjust ? `${p.adjust.dx}:${p.adjust.dy}:${p.adjust.scale}` : "",
       job.bands ? `${job.bands.top}:${job.bands.bottom}:${job.bands.mode}` : "",
     ].join("|");
     if (lastShotKeys.get(shot.index) === key) continue;
-    lastShotKeys.set(shot.index, key);
 
     let card = ui.shots.querySelector(`[data-shot="${shot.index}"]`);
+    // กำลังลากสไลเดอร์ในการ์ดนี้อยู่ อย่าเพิ่งวาดทับ ค่าจะกระตุก
+    if (card && card.contains(document.activeElement) &&
+        document.activeElement.tagName === "INPUT" &&
+        document.activeElement.type === "range") continue;
+    lastShotKeys.set(shot.index, key);
     if (!card) {
       card = document.createElement("figure");
       card.className = "shot";
@@ -314,6 +319,7 @@ function drawShots(job) {
           <span class="shot-dur">${shot.duration.toFixed(1)} วิ</span>
         </div>
         ${p ? modeSwitch(shot.index, p.mode) : ""}
+        ${p ? tuneControls(shot.index, p) : ""}
         ${p ? `<p class="reason">${p.reason}</p>` : ""}
       </div>`;
   }
@@ -378,6 +384,44 @@ function frameOverlay(plan, src, bands) {
     );
   }
   return pieces.length ? `<span class="frame">${pieces.join("")}</span>` : "";
+}
+
+const MIN_SCALE = 0.4;
+
+/* ตรงกับ derive_crop ใน app/plan.py — ถ้าแก้ฝั่งใดต้องแก้ให้ตรงกัน */
+function deriveCrop(base, adjust, src) {
+  const a = { dx: 0, dy: 0, scale: 1, ...(adjust || {}) };
+  const w = base.w * a.scale;
+  const h = base.h * a.scale;
+  const centerX = base.center_x + a.dx * base.w;
+  const left = Math.max(0, Math.min(centerX - w / 2, src.width - w));
+  const centerY = base.y + base.h / 2 + a.dy * base.h / 2;
+  const top = Math.max(base.y, Math.min(centerY - h / 2, base.y + base.h - h));
+  return { x: Math.round(left), y: Math.round(top), w: Math.round(w), h: Math.round(h) };
+}
+
+function tuneControls(index, plan) {
+  if (plan.mode !== "crop" || !plan.crop_base) return "";
+  const a = { dx: 0, dy: 0, scale: 1, ...(plan.adjust || {}) };
+  const zoomed = a.scale < 0.999;
+  const touched = a.dx !== 0 || a.dy !== 0 || zoomed;
+  return `<div class="tune" data-index="${index}">
+    <label class="tune-row"><span>เลื่อน</span>
+      <input type="range" data-axis="dx" min="-100" max="100" step="1"
+             value="${Math.round(a.dx * 100)}" aria-label="เลื่อนกรอบซ้ายขวา" /></label>
+    <label class="tune-row"><span>ซูม</span>
+      <input type="range" data-axis="scale" min="40" max="100" step="1"
+             value="${Math.round(a.scale * 100)}" aria-label="ย่อขยายกรอบ" /></label>
+    <label class="tune-row" ${zoomed ? "" : "hidden"}><span>ขึ้นลง</span>
+      <input type="range" data-axis="dy" min="-100" max="100" step="1"
+             value="${Math.round(a.dy * 100)}" aria-label="เลื่อนกรอบขึ้นลง" /></label>
+    <button type="button" class="tune-reset" ${touched ? "" : "hidden"}>คืนค่าอัตโนมัติ</button>
+  </div>`;
+}
+
+function readTune(node) {
+  const get = (axis) => Number(node.querySelector(`[data-axis="${axis}"]`).value);
+  return { dx: get("dx") / 100, dy: get("dy") / 100, scale: get("scale") / 100 };
 }
 
 function modeSwitch(index, mode) {
@@ -496,6 +540,66 @@ ui.shots.addEventListener("click", (e) => {
 ui.shots.addEventListener("change", (e) => {
   const box = e.target.closest('input[type="checkbox"]');
   if (box) setIncluded(box.dataset.index, box.checked);
+});
+
+/* ลากสไลเดอร์ = พรีวิวขยับทันที (คำนวณฝั่ง client) ปล่อยเมื่อไหร่ค่อยส่งขึ้น server */
+async function commitTune(tune) {
+  const a = readTune(tune);
+  try {
+    draw(await api(
+      `/api/jobs/${jobId}/shots/${tune.dataset.index}/crop` +
+      `?dx=${a.dx}&dy=${a.dy}&scale=${a.scale}`,
+      { method: "POST" },
+    ));
+  } catch (err) {
+    showError(err.message);
+  }
+}
+
+ui.shots.addEventListener("input", (e) => {
+  const slider = e.target.closest('.tune input[type="range"]');
+  if (!slider || !lastJob) return;
+  const tune = slider.closest(".tune");
+  const card = tune.closest(".shot");
+  const index = Number(tune.dataset.index);
+  const plan = (lastJob.shots.find((s) => s.index === index) || {}).plan;
+  if (!plan || !plan.crop_base) return;
+
+  const adjust = readTune(tune);
+  // ซูมออกสุดแล้วไม่มีที่ให้ขยับขึ้นลง ซ่อนสไลเดอร์นั้นไว้
+  tune.querySelectorAll(".tune-row")[2].hidden = adjust.scale >= 0.999;
+  tune.querySelector(".tune-reset").hidden =
+    adjust.dx === 0 && adjust.dy === 0 && adjust.scale >= 0.999;
+
+  const crop = deriveCrop(plan.crop_base, adjust, lastJob.info);
+  const img = card.querySelector(".frame916-crop img");
+  if (img) {
+    const src = lastJob.info;
+    img.style.width = `${(src.width / crop.w) * 100}%`;
+    img.style.height = `${(src.height / crop.h) * 100}%`;
+    img.style.left = `${(-crop.x / crop.w) * 100}%`;
+    img.style.top = `${(-crop.y / crop.h) * 100}%`;
+  }
+  const keep = card.querySelector(".frame-keep");
+  if (keep) {
+    keep.style.left = `${(crop.x / lastJob.info.width) * 100}%`;
+    keep.style.width = `${(crop.w / lastJob.info.width) * 100}%`;
+  }
+});
+
+ui.shots.addEventListener("change", (e) => {
+  const slider = e.target.closest('.tune input[type="range"]');
+  if (slider && jobId) commitTune(slider.closest(".tune"));
+});
+
+ui.shots.addEventListener("click", (e) => {
+  const reset = e.target.closest(".tune-reset");
+  if (!reset || !jobId) return;
+  const tune = reset.closest(".tune");
+  tune.querySelector('[data-axis="dx"]').value = "0";
+  tune.querySelector('[data-axis="dy"]').value = "0";
+  tune.querySelector('[data-axis="scale"]').value = "100";
+  commitTune(tune);
 });
 
 /* คีย์ลัด — งานนี้ต้องไล่ตรวจ 40 กว่าซีนต่อคลิป การใช้เมาส์อย่างเดียวช้าเกินไป */

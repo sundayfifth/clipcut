@@ -22,29 +22,35 @@ AUDIO_ARGS = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
 BLUR_SIGMA = 25
 
 
-def _path_expression(crop: dict, path: dict | None) -> str:
+def _path_expression(shot_plan: dict) -> str:
     """ตำแหน่ง x ของกรอบ — คงที่ หรือขยับตาม polynomial ที่ fit ไว้ทั้ง shot
 
     ffmpeg ประเมิน expression ใหม่ทุกเฟรม ใช้ t เป็นวินาทีนับจากต้น segment
     clip() กันไม่ให้กรอบหลุดออกนอกภาพตอนเส้นแกว่งช่วงปลาย
+
+    ถ้าคนเลื่อนกรอบเอง จะบวก offset เข้าไปทั้งเส้น — กรอบยังตามคนอยู่ แค่เยื้องไปตามที่สั่ง
     """
+    crop, path = shot_plan["crop"], shot_plan.get("path")
     if not path or path.get("kind") != "poly":
         return str(crop["x"])
 
+    base = shot_plan.get("crop_base") or {}
+    adjust = shot_plan.get("adjust") or {}
+    offset = float(adjust.get("dx", 0.0)) * float(base.get("w", crop["w"]))
+
     terms = []
     for power, c in enumerate(path["coeffs"]):
-        if power == 0:
-            terms.append(f"{c:.6f}")
-        else:
-            terms.append(f"{c:.6f}*" + "*".join(["t"] * power))
+        value = c + offset if power == 0 else c
+        terms.append(f"{value:.6f}" if power == 0
+                     else f"{value:.6f}*" + "*".join(["t"] * power))
     centre = "+".join(terms).replace("+-", "-")
     return f"clip(({centre})-{crop['w'] / 2:.1f},0,in_w-out_w)"
 
 
-def _crop_filter(crop: dict, path: dict | None, tw: int, th: int) -> str:
-    x = _path_expression(crop, path)
+def _crop_filter(shot_plan: dict, tw: int, th: int) -> str:
+    crop = shot_plan["crop"]
     return (
-        f"crop={crop['w']}:{crop['h']}:'{x}':{crop['y']},"
+        f"crop={crop['w']}:{crop['h']}:'{_path_expression(shot_plan)}':{crop['y']},"
         f"scale={tw}:{th}:flags=lanczos,setsar=1"
     )
 
@@ -78,7 +84,7 @@ def render_shot(
                     if shot_plan.get("crop") else shot_plan
 
     if shot_plan["mode"] == "crop":
-        stages.append(_crop_filter(shot_plan["crop"], shot_plan.get("path"), tw, th))
+        stages.append(_crop_filter(shot_plan, tw, th))
     else:
         stages.append(_pad_filter(tw, th))
     vf = ",".join(stages) if len(stages) == 1 else _join_stages(stages)
