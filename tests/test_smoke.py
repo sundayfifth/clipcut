@@ -573,9 +573,11 @@ def test_can_listen_to_a_shot_and_to_the_join_it_would_leave(clip_with_audio):
         dest.unlink(missing_ok=True)
 
 
-def test_join_preview_skips_shots_that_were_deselected():
+def test_join_preview_skips_shots_that_were_deselected(tmp_path):
     """รอยต่อต้องมองข้ามซีนที่ไม่ได้เลือก เพราะมันไม่ได้อยู่ในไฟล์จริง"""
-    from app.preview_audio import join_audio
+    import subprocess as sp
+
+    import app.preview_audio as pa
 
     plan = {"shots": [
         {"shot_index": 0, "start": 0.0, "end": 2.0, "included": True},
@@ -583,22 +585,22 @@ def test_join_preview_skips_shots_that_were_deselected():
         {"shot_index": 2, "start": 4.0, "end": 6.0, "included": False},
         {"shot_index": 3, "start": 6.0, "end": 8.0, "included": True},
     ]}
-    # ตัดซีน 2 (index 1) ออก -> ต้องต่อซีน 0 กับซีน 3 ไม่ใช่ซีน 2 ที่ก็ถูกตัดเหมือนกัน
-    picked = []
 
-    def fake_extract(source, start, duration, dest):
-        picked.append(round(start, 2))
-        dest.write_bytes(b"x")
+    seen = {}
 
-    import app.preview_audio as pa
-    original, pa._extract = pa._extract, fake_extract
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        Path(cmd[-1]).write_bytes(b"x")
+        return sp.CompletedProcess(cmd, 0, "", "")
+
+    original, pa.subprocess.run = pa.subprocess.run, fake_run
     try:
-        try:
-            join_audio(Path("dummy.mp4"), plan, 1, Path("/tmp/pytest-join.m4a"))
-        except Exception:
-            pass  # concat จะพังเพราะไฟล์ปลอม สนใจแค่ว่าเลือกช่วงไหน
+        pa.join_audio(Path("dummy.mp4"), plan, 1, tmp_path / "join.m4a")
     finally:
-        pa._extract = original
+        pa.subprocess.run = original
 
-    assert picked[0] == 0.4    # ท้ายซีน 0 (2.0 - 1.6)
-    assert picked[1] == 6.0    # หัวซีน 4 ไม่ใช่ซีน 3 ที่ถูกตัดออก
+    cmd = seen["cmd"]
+    starts = [float(cmd[i + 1]) for i, a in enumerate(cmd) if a == "-ss"]
+    # ตัดซีน 2 (index 1) ออก -> ต้องต่อท้ายซีน 1 กับหัวซีน 4
+    # ไม่ใช่ซีน 3 ที่ก็ถูกตัดออกเหมือนกัน
+    assert starts == [0.4, 6.0], starts
