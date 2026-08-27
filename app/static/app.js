@@ -609,8 +609,8 @@ function listenRow(index, plan) {
     <button type="button" class="play" data-index="${index}" data-kind="shot">
       <span class="play-ico" aria-hidden="true"></span>ซีนนี้</button>
     <button type="button" class="play" data-index="${index}" data-kind="join"
-      title="ฟังว่าถ้าตัดซีนนี้ออก เสียงจะต่อกันยังไง">
-      <span class="play-ico" aria-hidden="true"></span>รอยต่อ</button>
+      title="ฟังเสียงท้ายซีนก่อนหน้าต่อกับหัวซีนถัดไป — คือเสียงที่จะได้ยินถ้าตัดซีนนี้ทิ้ง">
+      <span class="play-ico" aria-hidden="true"></span>ถ้าตัดออก</button>
   </div>`;
 }
 
@@ -657,6 +657,7 @@ ui.shots.addEventListener("click", (e) => {
 
 /* ข้อความที่จะหายเพราะ crop ข้าง = กราฟฟิกที่คนต้องไปทำใหม่ */
 function lostText(plan) {
+  // ไม่นับโลโก้ประจำช่อง — มันโผล่ทุกซีน ถ้านับด้วยการ์ดจะเตือนกันหมดทั้งหน้า
   return (plan && plan.text_boxes || []).filter((b) => b.lost && b.cause === "crop");
 }
 
@@ -956,6 +957,8 @@ ui.shots.addEventListener("pointercancel", endDrag);
 /* หมุนล้อบนภาพ = ซูมกรอบ */
 let wheelTimer = null;
 ui.shots.addEventListener("wheel", (e) => {
+  // ต้องกด Option/Alt ค้างถึงจะซูม — ไม่งั้นเลื่อนหน้าผ่านการ์ดแล้วกรอบเปลี่ยนโดยไม่ตั้งใจ
+  if (!e.altKey) return;
   const scrub = e.target.closest(".scrub");
   if (!scrub) return;
   const index = scrub.closest(".shot").dataset.shot;

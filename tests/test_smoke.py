@@ -340,8 +340,39 @@ def test_checklist_lists_the_actual_text_that_gets_cut_away():
     }
     out = build_checklist(plan)
     assert "ราคาเริ่มต้น 1,200" in out          # ยกข้อความจริงมาให้
-    assert "ทำกราฟฟิกใหม่ 1 จุด" in out         # นับเฉพาะที่หายเพราะ crop
+    assert "ทำกราฟฟิกใหม่ 1 ชิ้น" in out        # นับเป็นชิ้นงาน ไม่ใช่จำนวนครั้งที่โผล่
     assert "อยู่กลางจอ" in out                  # ของที่รอดก็บอกว่ารอด
+
+
+def test_one_graphic_across_many_shots_is_one_item_not_many():
+    """กราฟฟิกอันเดียวที่กินหลายซีน ต้องขึ้นเป็นรายการเดียว พร้อมบอกว่าอยู่ซีนไหนบ้าง"""
+    from app.report import build_checklist
+
+    def shot(i):
+        return {
+            "shot_index": i, "start": float(i), "end": float(i + 1), "mode": "crop",
+            "reason": "x", "crop": {"x": 800, "y": 0, "w": 405, "h": 720},
+            "confidence": 0.9, "included": True, "path": None,
+            "text_boxes": [{
+                "x0": 0.05, "y0": 0.4, "x1": 0.30, "y1": 0.47,
+                "text": "อยู่ใกล้โรงพยาบาล", "confidence": 1.0,
+                "lost": True, "cause": "crop", "kept": 0.0,
+            }],
+        }
+
+    plan = {
+        "source": "a.mp4",
+        "source_size": {"width": 1280, "height": 720},
+        "target_size": {"width": 1080, "height": 1920},
+        "bands": {"top": 0.0, "bottom": 0.0, "mode": "trim"},
+        "summary": {"total": 4, "included": 4, "crop": 4, "pad": 0, "duration": 4.0},
+        "shots": [shot(i) for i in range(4)],
+    }
+    out = build_checklist(plan)
+    assert "ทำกราฟฟิกใหม่ 1 ชิ้น" in out
+    assert "โผล่รวม 4 ซีน" in out
+    assert "ซีน 1, ซีน 2, ซีน 3, ซีน 4" in out
+    assert out.count("- [ ] “อยู่ใกล้โรงพยาบาล”") == 1
 
 
 # ── ปรับกรอบเอง ──────────────────────────────────────────────
@@ -604,3 +635,49 @@ def test_join_preview_skips_shots_that_were_deselected(tmp_path):
     # ตัดซีน 2 (index 1) ออก -> ต้องต่อท้ายซีน 1 กับหัวซีน 4
     # ไม่ใช่ซีน 3 ที่ก็ถูกตัดออกเหมือนกัน
     assert starts == [0.4, 6.0], starts
+
+
+def test_channel_logo_is_reported_once_not_per_shot():
+    """โลโก้ที่โผล่ทุกซีนต้องถูกจับเป็นของประจำ ไม่ใช่งานรายซีน
+
+    เจอจริง: "โลโก้ช่อง" ถูกรายงานว่าต้องทำใหม่ 9 ครั้งในคลิปเดียว
+    """
+    from app.textdet import TextBox, mark_persistent
+
+    # โลโก้มุมขวาบนตำแหน่งเดิม 6 ซีน + กราฟฟิกเฉพาะซีนอีก 2 อัน
+    text_by_shot = {
+        i: [TextBox(0.80, 0.05, 0.98, 0.08, "brand logo", 1.0)]
+        for i in range(6)
+    }
+    text_by_shot[0].append(TextBox(0.10, 0.40, 0.35, 0.47, "ราคา 1,200", 1.0))
+    text_by_shot[3].append(TextBox(0.12, 0.60, 0.40, 0.68, "โปรโมชั่น", 1.0))
+
+    mark_persistent(text_by_shot)
+
+    logos = [b for g in text_by_shot.values() for b in g if b.text == "brand logo"]
+    others = [b for g in text_by_shot.values() for b in g if b.text != "brand logo"]
+    assert all(b.persistent for b in logos), "โลโก้ต้องถูกจับว่าเป็นของประจำ"
+    assert not any(b.persistent for b in others), "กราฟฟิกเฉพาะซีนต้องไม่ถูกจับ"
+
+
+def test_persistent_logo_does_not_count_as_per_shot_work():
+    from app.analyze import VideoInfo
+    from app.bands import Bands
+    from app.plan import annotate_lost_text
+
+    info = VideoInfo(width=1280, height=720, duration=4, fps=25)
+    shot = {
+        "shot_index": 0, "mode": "crop",
+        "crop": {"x": 0, "y": 0, "w": 405, "h": 720},
+        "text_boxes": [
+            {"x0": 0.80, "y0": 0.05, "x1": 0.98, "y1": 0.08,
+             "text": "brand logo", "confidence": 1.0, "persistent": True},
+            {"x0": 0.75, "y0": 0.40, "x1": 0.95, "y1": 0.47,
+             "text": "ราคา 1,200", "confidence": 1.0, "persistent": False},
+        ],
+    }
+    annotate_lost_text(shot, info, Bands())
+    by_text = {b["text"]: b for b in shot["text_boxes"]}
+    # ทั้งคู่หลุดกรอบเหมือนกัน แต่แยกสาเหตุกัน
+    assert by_text["brand logo"]["cause"] == "persistent"
+    assert by_text["ราคา 1,200"]["cause"] == "crop"

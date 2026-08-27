@@ -268,6 +268,9 @@ def annotate_lost_text(shot_plan: dict, info: VideoInfo, bands: Bands) -> None:
         box["cause"] = (
             "band" if visible_h / h < 0.5 else "crop" if visible_w / w < 0.5 else ""
         )
+        # โลโก้ประจำช่องไม่นับเป็นงานรายซีน รายงานรวมทีเดียวใน checklist แทน
+        if box.get("persistent"):
+            box["cause"] = "persistent" if box["lost"] else box["cause"]
 
 
 def summarise(shots: list[dict]) -> dict:

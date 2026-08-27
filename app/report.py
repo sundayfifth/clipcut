@@ -43,6 +43,13 @@ def build_checklist(plan: dict) -> str:
         (s, b) for s in shots for b in (s.get("text_boxes") or [])
         if b.get("lost") and b.get("cause") == "crop"
     ]
+    # โลโก้/ลายน้ำประจำช่อง โผล่ทุกซีน รายงานรวมทีเดียวพอ
+    persistent: dict[str, int] = {}
+    for s in shots:
+        for b in (s.get("text_boxes") or []):
+            if b.get("cause") == "persistent":
+                key = b["text"].strip()[:40]
+                persistent[key] = persistent.get(key, 0) + 1
     lost_by_band = [
         (s, b) for s in shots for b in (s.get("text_boxes") or [])
         if b.get("lost") and b.get("cause") == "band"
@@ -60,22 +67,39 @@ def build_checklist(plan: dict) -> str:
             f"- [ ] **ใส่ซับใหม่** — แถบ{' และ '.join(parts)}ถูก{what}ทั้งคลิป "
             f"(ใช้ skill `subtitle-align`)"
         )
-    if lost_by_crop:
+    # กราฟฟิกอันเดียวมักกินหลายซีน จัดกลุ่มตามข้อความ ไม่งั้นรายการยาวเกินจำเป็น
+    grouped: dict[str, list[dict]] = {}
+    for shot, box in lost_by_crop:
+        key = box["text"].strip()[:50] or "(ไม่มีข้อความ)"
+        grouped.setdefault(key, []).append(shot)
+
+    if grouped:
+        appears = sum(len({s["shot_index"] for s in v}) for v in grouped.values())
         lines.append(
-            f"- [ ] **ทำกราฟฟิกใหม่ {len(lost_by_crop)} จุด** — โดนตัดข้างจากการ crop "
-            f"ดูรายการด้านล่าง"
+            f"- [ ] **ทำกราฟฟิกใหม่ {len(grouped)} ชิ้น** "
+            f"(โผล่รวม {appears} ซีน) — โดนตัดข้างจากการ crop"
         )
-    if not bands.active and not lost_by_crop:
+    if persistent:
+        names = " · ".join(f"“{t}”" for t in list(persistent)[:3])
+        lines.append(
+            f"- [ ] **วางโลโก้ประจำช่องใหม่** — {names} หายไปจากการ crop "
+            f"(โผล่ทุกซีน วางครั้งเดียวคลุมทั้งคลิปได้)"
+        )
+    if not bands.active and not lost_by_crop and not persistent:
         lines.append("- ไม่มีข้อความไหนหายไป ไม่ต้องเติมกราฟฟิก")
     lines.append("")
 
-    if lost_by_crop:
-        lines += ["## ข้อความที่หายเพราะโดน crop ข้าง", ""]
-        for shot, box in lost_by_crop:
-            lines.append(
-                f"- [ ] ซีน {shot['shot_index'] + 1} · {_tc(shot['start'])} "
-                f"· {_where(box)} · เหลือ {box['kept']:.0%} — “{box['text']}”"
-            )
+    if grouped:
+        lines += ["## กราฟฟิกที่ต้องทำใหม่", ""]
+        for text, shots_with in sorted(
+            grouped.items(), key=lambda kv: -len(kv[1])
+        ):
+            numbers = sorted({s["shot_index"] + 1 for s in shots_with})
+            where = ", ".join(f"ซีน {n}" for n in numbers[:6])
+            more = f" (+{len(numbers) - 6})" if len(numbers) > 6 else ""
+            first = min(shots_with, key=lambda s: s["start"])
+            lines.append(f"- [ ] “{text}”")
+            lines.append(f"      {where}{more} · เริ่ม {_tc(first['start'])}")
         lines.append("")
 
     if lost_by_band:
@@ -116,9 +140,9 @@ def build_checklist(plan: dict) -> str:
         else:
             lines.append("- ย่อทั้งเฟรม เติมพื้นหลังเบลอบน-ล่าง ไม่มีอะไรถูกตัดข้าง")
 
-        boxes = s.get("text_boxes") or []
+        boxes = [b for b in (s.get("text_boxes") or []) if not b.get("persistent")]
         if not boxes:
-            lines.append("- ไม่พบข้อความในซีนนี้")
+            lines.append("- ไม่พบข้อความเฉพาะของซีนนี้")
         for box in boxes:
             state = (
                 "❌ หาย" if box.get("lost")

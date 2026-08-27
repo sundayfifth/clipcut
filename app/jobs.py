@@ -40,7 +40,7 @@ from app.ingest import download_youtube, is_youtube_url
 from app.plan import build_plan, clamp_adjust, derive_crop, summarise
 from app.render import RenderCancelled, render_plan
 from app.report import build_checklist
-from app.textdet import TextBox, detect_shots_text, suggest_bands
+from app.textdet import TextBox, detect_shots_text, mark_persistent, suggest_bands
 
 
 @dataclass
@@ -378,6 +378,7 @@ class JobStore:
                     job.source, shots, self.work_dir / job.id,
                     on_progress=lambda p: setattr(job, "progress", 0.90 + 0.06 * p),
                 )
+                mark_persistent(job.text)
                 job.suggested_bands = suggest_bands(job.text)
             except Exception:  # noqa: BLE001 — ตรวจข้อความพลาดไม่ควรล้มทั้งงาน
                 traceback.print_exc()

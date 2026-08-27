@@ -39,6 +39,8 @@ class TextBox:
     y1: float
     text: str
     confidence: float
+    # โผล่ที่ตำแหน่งเดิมหลายซีน = โลโก้/ลายน้ำประจำช่อง ไม่ใช่กราฟฟิกรายซีน
+    persistent: bool = False
 
     @property
     def width(self) -> float:
@@ -138,12 +140,27 @@ def detect_shots_text(
     return out
 
 
+def _norm(text: str) -> str:
+    return "".join(text.split()).lower()
+
+
 def _merge(boxes: list[TextBox]) -> list[TextBox]:
-    """รวมกล่องที่ทับกันจากหลายเฟรม เก็บอันที่มั่นใจสุดไว้"""
+    """รวมกล่องซ้ำจากหลายเฟรมในซีนเดียวกัน เก็บอันที่มั่นใจสุดไว้
+
+    ซ้ำได้ 2 แบบ: ทับกันในตำแหน่ง (ข้อความนิ่ง) หรือข้อความเดียวกันคนละตำแหน่ง
+    (กราฟฟิกเคลื่อนไหวเลื่อนเข้ามาระหว่างเฟรมที่ sample)
+    """
     kept: list[TextBox] = []
+    seen_text: set[str] = set()
     for box in sorted(boxes, key=lambda b: b.confidence, reverse=True):
-        if not any(_overlaps(box, other) for other in kept):
-            kept.append(box)
+        key = _norm(box.text)
+        if key and key in seen_text:
+            continue
+        if any(_overlaps(box, other) for other in kept):
+            continue
+        kept.append(box)
+        if key:
+            seen_text.add(key)
     return sorted(kept, key=lambda b: (b.y0, b.x0))
 
 
@@ -155,6 +172,33 @@ def _overlaps(a: TextBox, b: TextBox, threshold: float = 0.4) -> bool:
         return False
     smaller = min((a.x1 - a.x0) * (a.y1 - a.y0), (b.x1 - b.x0) * (b.y1 - b.y0))
     return smaller > 0 and inter / smaller >= threshold
+
+
+def mark_persistent(text_by_shot: dict[int, list[TextBox]]) -> None:
+    """ทำเครื่องหมายข้อความที่อยู่ตำแหน่งเดิมข้ามหลายซีน
+
+    โลโก้ช่องโผล่ทุกซีนที่มุมเดิม ถ้ารายงานทีละซีนจะกลายเป็นรายการยาวเหยียด
+    ที่คนตัดต่อไม่ได้ต้องทำอะไรกับมัน (เจอจริง: "โลโก้ช่อง" ขึ้น 9 ครั้ง)
+    """
+    if not text_by_shot:
+        return
+    threshold = max(3, round(len(text_by_shot) * 0.25))
+
+    groups: list[tuple[float, float, set[int], list[TextBox]]] = []
+    for shot_index, boxes in text_by_shot.items():
+        for box in boxes:
+            for i, (gx, gy, shots, members) in enumerate(groups):
+                if abs(gx - box.x0) <= 0.04 and abs(gy - box.y0) <= 0.04:
+                    shots.add(shot_index)
+                    members.append(box)
+                    break
+            else:
+                groups.append((box.x0, box.y0, {shot_index}, [box]))
+
+    for _, _, shots, members in groups:
+        if len(shots) >= threshold:
+            for box in members:
+                box.persistent = True
 
 
 def _percentile(values: list[float], q: float) -> float:
