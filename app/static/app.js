@@ -267,6 +267,9 @@ function draw(job) {
   const reviewable = job.status === "ready" || job.status === "done" || job.status === "rendering";
   if (!reviewable) return;
 
+  // ซ่อนหน้าว่างตรงนี้ด้วย ไม่พึ่ง enterWorking อย่างเดียว
+  // เผื่อกรณีเปิดงานที่ค้างไว้กลับมาโดยไม่ได้เริ่มงานใหม่
+  ui.empty.hidden = true;
   ui.working.hidden = true;
   ui.results.hidden = false;
   ui.actionbar.hidden = false;
