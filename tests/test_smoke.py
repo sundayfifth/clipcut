@@ -516,3 +516,89 @@ def test_dropping_a_loud_shot_is_counted_in_the_summary():
     assert s["included"] == 1
     # ตัดออก 2 ซีน แต่มีแค่ซีนเดียวที่มีคนพูด — เตือนเฉพาะอันนั้น
     assert s["dropped_with_speech"] == 1
+
+
+# ── ฟังเสียงก่อนตัดสินใจ ─────────────────────────────────────
+
+@pytest.fixture
+def clip_with_audio(tmp_path_factory):
+    """คลิป 3 ซีน มีเสียงต่างกันแต่ละซีน จะได้แยกออกว่าฟังซีนไหนอยู่"""
+    import subprocess
+
+    path = tmp_path_factory.mktemp("media") / "audio3.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=size=320x180:rate=25:duration=2",
+            "-f", "lavfi", "-i", "smptebars=size=320x180:rate=25:duration=2",
+            "-f", "lavfi", "-i", "color=c=navy:size=320x180:rate=25:duration=2",
+            "-f", "lavfi", "-i", "sine=frequency=300:duration=6",
+            "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]",
+            "-map", "[v]", "-map", "3:a", "-shortest",
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-c:a", "aac", str(path),
+        ],
+        check=True, capture_output=True,
+    )
+    return path
+
+
+def test_can_listen_to_a_shot_and_to_the_join_it_would_leave(clip_with_audio):
+    """ฟังเสียงซีนนั้น และฟังว่าถ้าตัดออกแล้วเสียงจะต่อกันยังไง"""
+    dest = INPUT_DIR / "pytest-audio.mp4"
+    shutil.copy(clip_with_audio, dest)
+    try:
+        job = client.post("/api/jobs", params={"name": dest.name}).json()
+        jid = job["id"]
+        job = _wait(jid, "ready")
+        assert job["status"] == "ready", job.get("error")
+        assert len(job["shots"]) >= 3
+
+        shot = client.get(f"/api/jobs/{jid}/shots/1/audio", params={"kind": "shot"})
+        assert shot.status_code == 200
+        assert shot.headers["content-type"].startswith("audio/")
+        assert len(shot.content) > 500
+
+        # รอยต่อ = ท้ายซีนก่อนหน้า + หัวซีนถัดไป จึงต้องมีเสียงเหมือนกัน
+        join = client.get(f"/api/jobs/{jid}/shots/1/audio", params={"kind": "join"})
+        assert join.status_code == 200
+        assert len(join.content) > 500
+
+        assert client.get(
+            f"/api/jobs/{jid}/shots/1/audio", params={"kind": "หมุน"}
+        ).status_code == 400
+        assert client.get(
+            f"/api/jobs/{jid}/shots/999/audio", params={"kind": "shot"}
+        ).status_code == 404
+    finally:
+        dest.unlink(missing_ok=True)
+
+
+def test_join_preview_skips_shots_that_were_deselected():
+    """รอยต่อต้องมองข้ามซีนที่ไม่ได้เลือก เพราะมันไม่ได้อยู่ในไฟล์จริง"""
+    from app.preview_audio import join_audio
+
+    plan = {"shots": [
+        {"shot_index": 0, "start": 0.0, "end": 2.0, "included": True},
+        {"shot_index": 1, "start": 2.0, "end": 4.0, "included": False},
+        {"shot_index": 2, "start": 4.0, "end": 6.0, "included": False},
+        {"shot_index": 3, "start": 6.0, "end": 8.0, "included": True},
+    ]}
+    # ตัดซีน 2 (index 1) ออก -> ต้องต่อซีน 0 กับซีน 3 ไม่ใช่ซีน 2 ที่ก็ถูกตัดเหมือนกัน
+    picked = []
+
+    def fake_extract(source, start, duration, dest):
+        picked.append(round(start, 2))
+        dest.write_bytes(b"x")
+
+    import app.preview_audio as pa
+    original, pa._extract = pa._extract, fake_extract
+    try:
+        try:
+            join_audio(Path("dummy.mp4"), plan, 1, Path("/tmp/pytest-join.m4a"))
+        except Exception:
+            pass  # concat จะพังเพราะไฟล์ปลอม สนใจแค่ว่าเลือกช่วงไหน
+    finally:
+        pa._extract = original
+
+    assert picked[0] == 0.4    # ท้ายซีน 0 (2.0 - 1.6)
+    assert picked[1] == 6.0    # หัวซีน 4 ไม่ใช่ซีน 3 ที่ถูกตัดออก

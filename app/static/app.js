@@ -139,6 +139,7 @@ async function loadSources(activeName) {
 /* ── เริ่มงาน ────────────────────────────────────────── */
 
 function enterWorking() {
+  stopAudio();
   clearError();
   ui.empty.hidden = true;
   ui.results.hidden = true;
@@ -415,6 +416,7 @@ function drawShots(job) {
           <span>${tc(shot.start)} → ${tc(shot.end)}</span>
           <span class="shot-dur">${shot.duration.toFixed(1)} วิ</span>
         </div>
+        ${listenRow(shot.index, p)}
         ${p ? modeSwitch(shot.index, p.mode) : ""}
         ${p ? tuneControls(shot.index, p) : ""}
         ${!included && p && p.has_speech
@@ -599,6 +601,59 @@ function planOf(index) {
   const shot = lastJob.shots.find((s) => s.index === Number(index));
   return shot ? shot.plan : null;
 }
+
+/* ฟังก่อนตัดสินใจ — "ซีนนี้" บอกว่าพูดอะไร · "รอยต่อ" บอกว่าตัดแล้วสะดุดมั้ย */
+function listenRow(index, plan) {
+  if (!plan) return "";
+  return `<div class="listen">
+    <button type="button" class="play" data-index="${index}" data-kind="shot">
+      <span class="play-ico" aria-hidden="true"></span>ซีนนี้</button>
+    <button type="button" class="play" data-index="${index}" data-kind="join"
+      title="ฟังว่าถ้าตัดซีนนี้ออก เสียงจะต่อกันยังไง">
+      <span class="play-ico" aria-hidden="true"></span>รอยต่อ</button>
+  </div>`;
+}
+
+/* เล่นทีละอันเท่านั้น กดอันใหม่ให้หยุดอันเก่า */
+let player = null;
+let playingBtn = null;
+
+function stopAudio() {
+  if (player) {
+    // ถอด handler ก่อนล้าง src — การเซ็ต src="" ทำให้ onerror ทำงาน
+    // แล้วจะขึ้นข้อความว่าเล่นไม่ได้ทุกครั้งที่เสียงเล่นจบปกติ
+    player.onended = null;
+    player.onerror = null;
+    player.pause();
+    player.removeAttribute("src");
+    player.load();
+    player = null;
+  }
+  if (playingBtn) { playingBtn.classList.remove("is-playing"); playingBtn = null; }
+}
+
+ui.shots.addEventListener("click", (e) => {
+  const btn = e.target.closest(".play");
+  if (!btn || !jobId) return;
+  e.preventDefault();
+
+  const wasPlaying = btn === playingBtn;
+  stopAudio();
+  if (wasPlaying) return;   // กดซ้ำที่ปุ่มเดิม = หยุด
+
+  player = new Audio(
+    `/api/jobs/${jobId}/shots/${btn.dataset.index}/audio` +
+    `?kind=${btn.dataset.kind}&_=${Date.now()}`,
+  );
+  playingBtn = btn;
+  btn.classList.add("is-playing");
+  player.onended = stopAudio;
+  player.onerror = () => {
+    stopAudio();
+    showError("เล่นเสียงไม่ได้ — คลิปนี้อาจไม่มีเสียง");
+  };
+  player.play().catch(() => stopAudio());
+});
 
 /* ข้อความที่จะหายเพราะ crop ข้าง = กราฟฟิกที่คนต้องไปทำใหม่ */
 function lostText(plan) {

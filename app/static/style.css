@@ -906,3 +906,39 @@ kbd {
 }
 
 .warn-text { color: var(--warn); }
+
+/* ── ปุ่มฟังเสียง ──────────────────────────────────── */
+
+.listen { display: flex; gap: 0.3rem; }
+
+.play {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 550;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.play:hover { color: var(--ink); border-color: var(--ink-faint); }
+.play.is-playing { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+/* สามเหลี่ยมเล่น เปลี่ยนเป็นสี่เหลี่ยมหยุดตอนกำลังเล่น */
+.play-ico {
+  width: 0; height: 0;
+  border-style: solid;
+  border-width: 4px 0 4px 6px;
+  border-color: transparent transparent transparent currentColor;
+}
+.play.is-playing .play-ico {
+  width: 7px; height: 7px;
+  border: 0;
+  background: currentColor;
+  border-radius: 1px;
+}

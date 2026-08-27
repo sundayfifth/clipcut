@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from app.analyze import AnalyzeError, DEFAULT_SENSITIVITY, SENSITIVITY
 from app.bands import Bands, band_filter
 from app.jobs import JobStore
+from app.preview_audio import join_audio, shot_audio
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -28,7 +29,7 @@ for _sub in ("input", "work", "output"):
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
-app = FastAPI(title="clipcut", version="0.6.0")
+app = FastAPI(title="clipcut", version="0.7.0")
 jobs = JobStore(WORK_DIR, OUTPUT_DIR)
 _restored = jobs.restore()
 if _restored:
@@ -272,6 +273,32 @@ def download_output(job_id: str) -> FileResponse:
     if not job.output or not Path(job.output).is_file():
         raise HTTPException(404, "ยังไม่มีไฟล์ผลลัพธ์")
     return FileResponse(job.output, filename=Path(job.output).name)
+
+
+@app.get("/api/jobs/{job_id}/shots/{shot_index}/audio")
+def shot_audio_clip(job_id: str, shot_index: int, kind: str = "shot") -> FileResponse:
+    """เสียงให้ฟังก่อนตัดสินใจ — kind=shot คือเสียงซีนนั้น · kind=join คือเสียงรอยต่อถ้าตัดออก"""
+    job = _require_job(job_id)
+    if not job.plan:
+        raise HTTPException(400, "ยังวิเคราะห์ไม่เสร็จ")
+    if kind not in ("shot", "join"):
+        raise HTTPException(400, "kind ต้องเป็น shot หรือ join")
+
+    shot_plan = next(
+        (s for s in job.plan["shots"] if s["shot_index"] == shot_index), None
+    )
+    if shot_plan is None:
+        raise HTTPException(404, f"ไม่พบซีนที่ {shot_index + 1}")
+
+    dest = WORK_DIR / job_id / "audio" / f"{kind}-{shot_index:04d}.m4a"
+    try:
+        if kind == "shot":
+            shot_audio(job.source, shot_plan, dest)
+        else:
+            join_audio(job.source, job.plan, shot_index, dest)
+    except AnalyzeError as err:
+        raise HTTPException(400, str(err)) from err
+    return FileResponse(dest, media_type="audio/mp4", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/jobs/{job_id}/thumbs/{filename}")
