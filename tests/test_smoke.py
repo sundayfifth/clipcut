@@ -698,3 +698,71 @@ def test_join_shape_matches_between_client_and_server():
     assert float(match.group(1)) == JOIN_CONTEXT, (
         f"JOIN_CONTEXT ไม่ตรงกัน: js={match.group(1)} python={JOIN_CONTEXT}"
     )
+
+
+# ── ซีนที่กราฟฟิกเยอะ ควรย่อแทนที่จะ crop ────────────────────
+
+def _shot_with_text(n_boxes_on_left: int, mode: str = "crop") -> dict:
+    """ซีนที่มีข้อความอยู่ริมซ้าย ซึ่งจะหายถ้า crop ไปทางขวา"""
+    return {
+        "shot_index": 0, "start": 0.0, "end": 3.0, "mode": mode, "reason": "x",
+        "crop": {"x": 800, "y": 0, "w": 405, "h": 720},
+        "crop_base": {"center_x": 1002.5, "w": 405.0, "h": 720.0, "y": 0},
+        "confidence": 0.9, "included": True, "path": None,
+        "text_boxes": [
+            {"x0": 0.02, "y0": 0.30 + i * 0.08, "x1": 0.28, "y1": 0.36 + i * 0.08,
+             "text": f"ข้อความที่ {i + 1}", "confidence": 1.0}
+            for i in range(n_boxes_on_left)
+        ],
+    }
+
+
+def test_shot_flips_to_pad_when_cropping_would_destroy_several_graphics():
+    from app.analyze import VideoInfo
+    from app.bands import Bands
+    from app.plan import TEXT_LOSS_LIMIT, annotate_lost_text, prefer_pad_over_losing_text
+
+    info = VideoInfo(width=1280, height=720, duration=3, fps=25)
+
+    # ข้อความน้อยกว่าเกณฑ์ -> ยังเต็มจอเหมือนเดิม
+    few = _shot_with_text(TEXT_LOSS_LIMIT - 1)
+    annotate_lost_text(few, info, Bands())
+    prefer_pad_over_losing_text(few, info, Bands())
+    assert few["mode"] == "crop"
+
+    # ถึงเกณฑ์ -> พลิกเป็นย่อทั้งภาพ พร้อมบอกเหตุผลเป็นภาษาคน
+    many = _shot_with_text(TEXT_LOSS_LIMIT)
+    annotate_lost_text(many, info, Bands())
+    prefer_pad_over_losing_text(many, info, Bands())
+    assert many["mode"] == "pad"
+    assert "ข้อความจะหาย" in many["reason"]
+    # พอย่อแล้วข้อความต้องไม่หายอีกต่อไป
+    assert not any(b.get("lost") for b in many["text_boxes"])
+
+
+def test_manual_choice_is_never_overridden_by_the_text_rule():
+    from app.analyze import VideoInfo
+    from app.bands import Bands
+    from app.plan import TEXT_LOSS_LIMIT, annotate_lost_text, prefer_pad_over_losing_text
+
+    info = VideoInfo(width=1280, height=720, duration=3, fps=25)
+    shot = _shot_with_text(TEXT_LOSS_LIMIT + 2)
+    shot["manual_mode"] = True
+    annotate_lost_text(shot, info, Bands())
+    prefer_pad_over_losing_text(shot, info, Bands())
+    assert shot["mode"] == "crop", "คนเลือกเองแล้ว เครื่องห้ามเปลี่ยน"
+
+
+def test_channel_logo_alone_never_triggers_the_flip():
+    """โลโก้โผล่ทุกซีน ถ้านับด้วยจะพลิกทั้งคลิปเป็นย่อหมด"""
+    from app.analyze import VideoInfo
+    from app.bands import Bands
+    from app.plan import annotate_lost_text, prefer_pad_over_losing_text
+
+    info = VideoInfo(width=1280, height=720, duration=3, fps=25)
+    shot = _shot_with_text(4)
+    for box in shot["text_boxes"]:
+        box["persistent"] = True
+    annotate_lost_text(shot, info, Bands())
+    prefer_pad_over_losing_text(shot, info, Bands())
+    assert shot["mode"] == "crop"

@@ -49,6 +49,12 @@ STATIC_THRESHOLD_PX = 24.0
 # ดีกรีสูงสุดของเส้นทางกล้อง ต่ำไว้กันเส้นแกว่งตอน extrapolate (งานวิจัย: AutoFlip ใช้ 4)
 MAX_PATH_DEGREE = 3
 
+# ถ้า crop แล้วข้อความจะหายตั้งแต่เท่านี้จุดขึ้นไป ให้ย่อทั้งภาพแทน
+# ย่อแล้วข้อความอยู่ครบ ไม่ต้องทำกราฟฟิกใหม่เลย แลกกับภาพเล็กลงในซีนนั้น
+# วัดกับคลิปจริง: เกณฑ์ 3 พลิก 4 ซีน ประหยัดงาน 39 จาก 42 จุด
+# ส่วนเกณฑ์ 1-2 พลิกเพิ่มอีก 2 ซีนแลกกับแค่ 3 จุด ไม่คุ้ม
+TEXT_LOSS_LIMIT = 3
+
 
 @dataclass
 class ShotPlan:
@@ -273,6 +279,34 @@ def annotate_lost_text(shot_plan: dict, info: VideoInfo, bands: Bands) -> None:
             box["cause"] = "persistent" if box["lost"] else box["cause"]
 
 
+def prefer_pad_over_losing_text(shot_plan: dict, info: VideoInfo, bands: Bands) -> None:
+    """ซีนที่ crop แล้วข้อความหายเยอะ ให้ย่อทั้งภาพแทน
+
+    เหตุผล: ย่อแล้วข้อความอยู่ครบทั้งหมด ไม่ต้องทำกราฟฟิกใหม่เลย
+    แลกกับภาพเล็กลงในซีนนั้น ซึ่งคุ้มกว่าการนั่งทำกราฟฟิกใหม่ทีละชิ้น
+
+    ไม่แตะซีนที่คนเลือกโหมดเอง
+    """
+    if shot_plan.get("mode") != "crop" or shot_plan.get("manual_mode"):
+        return
+
+    # โลโก้ประจำช่องไม่นับ — รายงานรวมทีเดียวอยู่แล้ว วางใหม่ครั้งเดียวคลุมทั้งคลิป
+    losing = [
+        b for b in (shot_plan.get("text_boxes") or [])
+        if b.get("lost") and b.get("cause") == "crop" and not b.get("persistent")
+    ]
+    if len(losing) < TEXT_LOSS_LIMIT:
+        return
+
+    shot_plan["mode"] = "pad"
+    shot_plan["reason"] = (
+        f"ถ้าเต็มจอ ข้อความจะหาย {len(losing)} จุด ย่อทั้งภาพแทนจะได้ไม่ต้องทำกราฟฟิกใหม่"
+    )
+    shot_plan["auto_pad_for_text"] = True
+    # โหมดเปลี่ยนแล้ว สาเหตุการหายของแต่ละกล่องเปลี่ยนตาม ต้องคำนวณใหม่
+    annotate_lost_text(shot_plan, info, bands)
+
+
 def summarise(shots: list[dict]) -> dict:
     included = [s for s in shots if s.get("included", True)]
     dropped_speech = [
@@ -309,6 +343,7 @@ def build_plan(
         d["audio_db"] = level.get("db")
         d["text_boxes"] = [b.as_dict() for b in (text or {}).get(d["shot_index"], [])]
         annotate_lost_text(d, info, bands)
+        prefer_pad_over_losing_text(d, info, bands)
     return {
         "version": 2,
         "source": source.name,
