@@ -766,3 +766,39 @@ def test_channel_logo_alone_never_triggers_the_flip():
     annotate_lost_text(shot, info, Bands())
     prefer_pad_over_losing_text(shot, info, Bands())
     assert shot["mode"] == "crop"
+
+
+# ── เครื่องที่อ่านข้อความไม่ได้ (เช่นวินโดว์) ────────────────
+
+def test_health_reports_whether_text_detection_works_here():
+    body = client.get("/health").json()
+    assert isinstance(body["text_detection"], bool)
+
+
+def test_checklist_never_claims_nothing_was_lost_when_it_could_not_look():
+    """บนเครื่องที่อ่านข้อความไม่ได้ ห้ามสรุปว่า "ไม่มีข้อความหาย"
+
+    การโกหกแบบนี้แย่กว่าไม่บอกอะไรเลย เพราะคนจะข้ามการตรวจกราฟฟิกไปทั้งคลิป
+    """
+    from app.report import build_checklist
+
+    plan = {
+        "source": "a.mp4",
+        "source_size": {"width": 1280, "height": 720},
+        "target_size": {"width": 1080, "height": 1920},
+        "bands": {"top": 0.0, "bottom": 0.0, "mode": "trim"},
+        "summary": {"total": 1, "included": 1, "crop": 1, "pad": 0, "duration": 2.0},
+        "shots": [{
+            "shot_index": 0, "start": 0.0, "end": 2.0, "mode": "crop", "reason": "x",
+            "crop": {"x": 400, "y": 0, "w": 405, "h": 720}, "confidence": 0.9,
+            "included": True, "path": None, "text_boxes": [],
+        }],
+    }
+
+    ok = build_checklist({**plan, "text_detection": True})
+    assert "ไม่มีข้อความไหนหายไป" in ok
+
+    blind = build_checklist({**plan, "text_detection": False})
+    assert "ไม่มีข้อความไหนหายไป" not in blind
+    assert "อ่านข้อความในเฟรมไม่ได้" in blind
+    assert "ต้องเปิดคลิปตรวจเอง" in blind

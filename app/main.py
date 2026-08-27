@@ -15,6 +15,7 @@ from app.analyze import AnalyzeError, DEFAULT_SENSITIVITY, SENSITIVITY
 from app.bands import Bands, band_filter
 from app.jobs import JobStore
 from app.preview_audio import join_audio, shot_audio
+from app.textdet import available as text_detection_available
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -37,12 +38,14 @@ if _restored:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict:
     """เช็คว่า server ขึ้นแล้วและเห็นโฟลเดอร์ media"""
     return {
         "status": "ok",
         "version": app.version,
         "media_dir": "found" if MEDIA_DIR.is_dir() else "missing",
+        # Apple Vision มีเฉพาะบน macOS — หน้าเว็บต้องรู้ตั้งแต่ยังไม่เลือกคลิป
+        "text_detection": text_detection_available(),
     }
 
 

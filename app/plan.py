@@ -331,6 +331,7 @@ def build_plan(
     bands: Bands | None = None,
     audio: dict[int, dict] | None = None,
     text: dict | None = None,
+    text_detection: bool = True,
 ) -> dict:
     """edit plan — contract กลางที่ทุก module คุยกันผ่านมัน (ดู CLAUDE.md)"""
     bands = bands or Bands()
@@ -350,6 +351,9 @@ def build_plan(
         "source_size": {"width": info.width, "height": info.height},
         "target_size": {"width": TARGET_WIDTH, "height": TARGET_HEIGHT},
         "bands": bands.as_dict(),
+        # เครื่องนี้อ่านข้อความในเฟรมได้มั้ย (Apple Vision มีเฉพาะบน macOS)
+        # ถ้าไม่ได้ ห้ามสรุปว่า "ไม่มีข้อความหาย" เพราะจริงๆ คือมองไม่เห็น
+        "text_detection": bool(text_detection),
         "shots": shot_dicts,
         "summary": summarise(shot_dicts),
     }

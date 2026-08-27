@@ -40,7 +40,13 @@ from app.ingest import download_youtube, is_youtube_url
 from app.plan import build_plan, clamp_adjust, derive_crop, summarise
 from app.render import RenderCancelled, render_plan
 from app.report import build_checklist
-from app.textdet import TextBox, detect_shots_text, mark_persistent, suggest_bands
+from app.textdet import (
+    TextBox,
+    available as text_detection_available,
+    detect_shots_text,
+    mark_persistent,
+    suggest_bands,
+)
 
 
 @dataclass
@@ -84,6 +90,7 @@ class Job:
             "checklist": self.checklist,
             "can_undo": bool(self.history),
             "bands": (self.plan or {}).get("bands"),
+            "text_detection": (self.plan or {}).get("text_detection", True),
             "subtitle_hint": self.subtitle_hint,
             "suggested_bands": self.suggested_bands,
             "summary": (self.plan or {}).get("summary"),
@@ -216,6 +223,7 @@ class JobStore:
         job.plan = build_plan(
             job.source, info, job.shots, job.detections, bands,
             audio=job.audio, text=job.text,
+            text_detection=text_detection_available(),
         )
 
         for shot_plan in job.plan["shots"]:
@@ -397,6 +405,7 @@ class JobStore:
             job.plan = build_plan(
                 job.source, info, shots, detections,
                 audio=job.audio, text=job.text,
+                text_detection=text_detection_available(),
             )
             job.subtitle_hint = _subtitle_hint(shots, detections)
             _write_plan(self.work_dir / job.id / "edit-plan.json", job.plan)

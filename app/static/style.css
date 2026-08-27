@@ -976,3 +976,47 @@ kbd {
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── หน้าแรก: บอกว่าเครื่องมือช่วยอะไร ─────────────── */
+
+.empty { max-width: 60ch; }
+.empty h2 { font-size: 1.375rem; }
+.empty-lead { margin: 0; color: var(--ink-muted); font-size: 0.9375rem; }
+
+.helps {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.7rem;
+  text-align: left;
+}
+.helps li {
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--ink-faint);
+  padding-left: 1.4rem;
+  position: relative;
+  text-wrap: pretty;
+}
+/* เครื่องหมายถูก บอกว่าเป็นสิ่งที่ไม่ต้องทำเองแล้ว */
+.helps li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--crop);
+  font-weight: 700;
+}
+.helps strong { color: var(--ink); font-weight: 600; display: block; }
+
+.empty-warn {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  text-align: left;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+}

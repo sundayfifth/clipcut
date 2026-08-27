@@ -45,6 +45,7 @@ const ui = {
   done: el("done"),
   filterEmpty: el("filter-empty"),
   ribbon: el("ribbon"),
+  emptyWarn: el("empty-warn"),
   undoBtn: el("undo-btn"),
   cancelBtn: el("cancel-btn"),
   previewAt: el("preview-at"),
@@ -107,6 +108,18 @@ function showSkeletons(n = 8) {
 }
 
 /* ── รายการไฟล์ ──────────────────────────────────────── */
+
+/* เครื่องที่ไม่ใช่ Mac อ่านข้อความในเฟรมไม่ได้ ต้องบอกให้รู้ตั้งแต่แรก
+   ไม่งั้นจะเข้าใจผิดว่า "ไม่มีกราฟฟิกหาย" ทั้งที่จริงคือมองไม่เห็น */
+function showTextDetectionNotice(job) {
+  const ok = (job || {}).text_detection !== false;
+  ui.emptyWarn.hidden = ok;
+  if (!ok) {
+    ui.emptyWarn.textContent =
+      "เครื่องนี้อ่านข้อความในเฟรมไม่ได้ (ใช้ Apple Vision ซึ่งมีเฉพาะบน Mac) " +
+      "จึงไม่มี checklist กราฟฟิกและไม่แนะนำแถบซับให้ — ส่วนอื่นใช้ได้ปกติ";
+  }
+}
 
 async function loadSources(activeName) {
   try {
@@ -274,6 +287,7 @@ function draw(job) {
     `${job.name} · ${i.aspect} · ${tc(i.duration)} · ${i.fps} fps`;
 
   lastJob = job;
+  showTextDetectionNotice(job);
   ui.undoBtn.disabled = !job.can_undo;
   ui.cancelBtn.hidden = job.status !== "rendering";
   drawTally(job.summary);
@@ -1235,3 +1249,4 @@ for (const btn of document.querySelectorAll("[data-band-mode]")) {
 
 ui.preview.dataset.state = "empty";
 loadSources();
+api("/health").then(showTextDetectionNotice).catch(() => {});

@@ -56,6 +56,12 @@ def build_checklist(plan: dict) -> str:
     ]
 
     lines += ["## สรุปสิ่งที่ต้องทำ", ""]
+    if not plan.get("text_detection", True):
+        lines += [
+            "> ⚠️ **เครื่องนี้อ่านข้อความในเฟรมไม่ได้** (ใช้ Apple Vision ซึ่งมีเฉพาะบน Mac)",
+            "> รายการด้านล่างจึงไม่รวมกราฟฟิกที่อาจหายไป — ต้องเปิดคลิปตรวจเอง",
+            "",
+        ]
     if bands.active:
         what = "ตัดทิ้ง" if bands.mode == "trim" else "เบลอทับ"
         parts = []
@@ -86,7 +92,11 @@ def build_checklist(plan: dict) -> str:
             f"(โผล่ทุกซีน วางครั้งเดียวคลุมทั้งคลิปได้)"
         )
     if not bands.active and not lost_by_crop and not persistent:
-        lines.append("- ไม่มีข้อความไหนหายไป ไม่ต้องเติมกราฟฟิก")
+        lines.append(
+            "- ตรวจข้อความไม่ได้บนเครื่องนี้ ต้องเปิดคลิปดูเองว่ามีกราฟฟิกไหนหายมั้ย"
+            if not plan.get("text_detection", True)
+            else "- ไม่มีข้อความไหนหายไป ไม่ต้องเติมกราฟฟิก"
+        )
     lines.append("")
 
     if grouped:
