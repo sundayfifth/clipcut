@@ -611,14 +611,46 @@ function listenRow(index, plan) {
     <button type="button" class="play" data-index="${index}" data-kind="join"
       title="ฟังเสียงท้ายซีนก่อนหน้าต่อกับหัวซีนถัดไป — คือเสียงที่จะได้ยินถ้าตัดซีนนี้ทิ้ง">
       <span class="play-ico" aria-hidden="true"></span>ถ้าตัดออก</button>
+  </div>
+  <div class="joinbar" hidden>
+    <div class="joinbar-track"><span class="joinbar-head"></span><span class="joinbar-seam"></span></div>
+    <p class="joinbar-label"></p>
   </div>`;
+}
+
+/* ต้องตรงกับ JOIN_CONTEXT ใน app/preview_audio.py */
+const JOIN_CONTEXT = 1.6;
+
+/* คำนวณว่ารอยตัดอยู่วินาทีที่เท่าไหร่ของคลิปเสียงที่กำลังจะเล่น
+   ใช้ตรรกะเดียวกับฝั่ง server — ถ้าแก้ฝั่งใดต้องแก้ให้ตรงกัน */
+function joinShape(index) {
+  if (!lastJob) return null;
+  const shots = lastJob.shots;
+  const at = shots.findIndex((s) => s.index === Number(index));
+  if (at < 0) return null;
+  const on = (s) => !s.plan || s.plan.included !== false;
+  const before = [...shots.slice(0, at)].reverse().find(on);
+  const after = shots.slice(at + 1).find(on);
+  if (!before && !after) return null;
+
+  const beforeLen = before ? Math.min(JOIN_CONTEXT, before.duration) : 0;
+  const afterLen = after ? Math.min(JOIN_CONTEXT, after.duration) : 0;
+  return {
+    seam: beforeLen,
+    total: beforeLen + afterLen,
+    before: before ? before.index + 1 : null,
+    after: after ? after.index + 1 : null,
+  };
 }
 
 /* เล่นทีละอันเท่านั้น กดอันใหม่ให้หยุดอันเก่า */
 let player = null;
 let playingBtn = null;
+let joinTicker = null;
 
 function stopAudio() {
+  cancelAnimationFrame(joinTicker);
+  for (const bar of ui.shots.querySelectorAll(".joinbar")) bar.hidden = true;
   if (player) {
     // ถอด handler ก่อนล้าง src — การเซ็ต src="" ทำให้ onerror ทำงาน
     // แล้วจะขึ้นข้อความว่าเล่นไม่ได้ทุกครั้งที่เสียงเล่นจบปกติ
@@ -647,6 +679,7 @@ ui.shots.addEventListener("click", (e) => {
   );
   playingBtn = btn;
   btn.classList.add("is-playing");
+  if (btn.dataset.kind === "join") showJoinBar(btn);
   player.onended = stopAudio;
   player.onerror = () => {
     stopAudio();
@@ -654,6 +687,34 @@ ui.shots.addEventListener("click", (e) => {
   };
   player.play().catch(() => stopAudio());
 });
+
+/* แถบบอกว่ารอยตัดอยู่ตรงไหน — ฟังอย่างเดียวแยกไม่ออกว่าหัวหรือท้าย */
+function showJoinBar(btn) {
+  const card = btn.closest(".shot");
+  const bar = card.querySelector(".joinbar");
+  const shape = joinShape(btn.dataset.index);
+  if (!bar || !shape || !shape.total) return;
+
+  const seamPct = (shape.seam / shape.total) * 100;
+  bar.hidden = false;
+  bar.querySelector(".joinbar-seam").style.left = `${seamPct}%`;
+  bar.querySelector(".joinbar-head").style.width = "0%";
+  bar.querySelector(".joinbar-label").textContent =
+    shape.before && shape.after
+      ? `ท้ายซีน ${shape.before}  ⇢  หัวซีน ${shape.after}`
+      : shape.before
+        ? `ท้ายซีน ${shape.before} (ไม่มีซีนต่อจากนี้)`
+        : `หัวซีน ${shape.after} (ไม่มีซีนก่อนหน้า)`;
+
+  const head = bar.querySelector(".joinbar-head");
+  const tick = () => {
+    if (!player) return;
+    const total = player.duration || shape.total;
+    head.style.width = `${Math.min(100, (player.currentTime / total) * 100)}%`;
+    joinTicker = requestAnimationFrame(tick);
+  };
+  tick();
+}
 
 /* ข้อความที่จะหายเพราะ crop ข้าง = กราฟฟิกที่คนต้องไปทำใหม่ */
 function lostText(plan) {

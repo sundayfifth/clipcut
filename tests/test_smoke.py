@@ -681,3 +681,20 @@ def test_persistent_logo_does_not_count_as_per_shot_work():
     # ทั้งคู่หลุดกรอบเหมือนกัน แต่แยกสาเหตุกัน
     assert by_text["brand logo"]["cause"] == "persistent"
     assert by_text["ราคา 1,200"]["cause"] == "crop"
+
+
+def test_join_shape_matches_between_client_and_server():
+    """แถบบอกรอยตัดฝั่งหน้าเว็บต้องใช้ตรรกะเดียวกับที่ server ตัดเสียงจริง
+
+    ถ้าสองฝั่งไม่ตรงกัน เส้นรอยตัดจะชี้ผิดตำแหน่ง ซึ่งแย่กว่าไม่มีเส้นเลย
+    """
+    import re
+
+    from app.preview_audio import JOIN_CONTEXT
+
+    js = Path("app/static/app.js").read_text(encoding="utf-8")
+    match = re.search(r"const JOIN_CONTEXT = ([\d.]+);", js)
+    assert match, "หา JOIN_CONTEXT ใน app.js ไม่เจอ"
+    assert float(match.group(1)) == JOIN_CONTEXT, (
+        f"JOIN_CONTEXT ไม่ตรงกัน: js={match.group(1)} python={JOIN_CONTEXT}"
+    )

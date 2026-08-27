@@ -942,3 +942,37 @@ kbd {
   background: currentColor;
   border-radius: 1px;
 }
+
+/* ── แถบบอกตำแหน่งรอยตัด ───────────────────────────── */
+
+.joinbar { display: grid; gap: 0.25rem; }
+.joinbar[hidden] { display: none; }
+
+.joinbar-track {
+  position: relative;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.joinbar-head {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: var(--accent);
+}
+/* เส้นแบ่งว่าตรงไหนคือรอยตัด — ก่อนเส้นคือท้ายซีนเดิม หลังเส้นคือหัวซีนถัดไป */
+.joinbar-seam {
+  position: absolute;
+  top: -2px; bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--warn);
+}
+
+.joinbar-label {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
